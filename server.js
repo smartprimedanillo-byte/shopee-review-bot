@@ -2488,6 +2488,194 @@ app.get("/scan-all-status", (req, res) => {
   });
 });
 
+app.get("/diagnose-1000-item", async (req, res) => {
+  try {
+    if (!authState.accessToken || !authState.shopId) {
+      return res.status(401).json({
+        ok: false,
+        message: "Loja ainda não autorizada nesta execução."
+      });
+    }
+
+    if (authState.expiresAt <= Date.now()) {
+      return res.status(401).json({
+        ok: false,
+        message: "Access token expirado."
+      });
+    }
+
+    const itemId = 18796892743;
+
+    const path =
+      "/api/v2/product/get_comment";
+
+    let cursor = "";
+    let more = true;
+
+    let pagina = 0;
+    let total = 0;
+
+    const paginas = [];
+
+    // Segurança para impedir loop infinito
+    const MAX_PAGINAS = 30;
+
+    while (more && pagina < MAX_PAGINAS) {
+      pagina++;
+
+      const timestamp =
+        Math.floor(Date.now() / 1000);
+
+      const sign = gerarAssinatura(
+        path,
+        timestamp,
+        authState.accessToken,
+        authState.shopId
+      );
+
+      let url =
+        `https://partner.shopeemobile.com${path}` +
+        `?partner_id=${PARTNER_ID}` +
+        `&timestamp=${timestamp}` +
+        `&access_token=${authState.accessToken}` +
+        `&shop_id=${authState.shopId}` +
+        `&sign=${sign}` +
+        `&page_size=100` +
+        `&item_id=${itemId}`;
+
+      if (cursor) {
+        url +=
+          `&cursor=${encodeURIComponent(cursor)}`;
+      }
+
+      const response =
+        await fetch(url);
+
+      const data =
+        await response.json();
+
+      if (data.error) {
+        return res.status(400).json({
+          ok: false,
+          pagina,
+          total_antes_do_erro: total,
+          shopee_error: data
+        });
+      }
+
+      const lista =
+        data.response
+          ?.item_comment_list || [];
+
+      total += lista.length;
+
+      const novoMore =
+        data.response?.more === true;
+
+      const novoCursor =
+        data.response?.next_cursor || "";
+
+      paginas.push({
+        pagina,
+        quantidade:
+          lista.length,
+
+        total_acumulado:
+          total,
+
+        more:
+          novoMore,
+
+        cursor_recebido:
+          novoCursor || null,
+
+        primeiro_comment_id:
+          lista.length > 0
+            ? lista[0].comment_id
+            : null,
+
+        ultimo_comment_id:
+          lista.length > 0
+            ? lista[lista.length - 1]
+                .comment_id
+            : null
+      });
+
+      more = novoMore;
+
+      // Proteção contra cursor repetido
+      if (
+        more &&
+        novoCursor === cursor
+      ) {
+        paginas.push({
+          alerta:
+            "Shopee repetiu o mesmo cursor."
+        });
+
+        break;
+      }
+
+      cursor =
+        novoCursor;
+
+      if (more && !cursor) {
+        paginas.push({
+          alerta:
+            "Shopee informou more=true, mas não forneceu next_cursor."
+        });
+
+        break;
+      }
+
+      await new Promise(resolve =>
+        setTimeout(resolve, 150)
+      );
+    }
+
+    return res.json({
+      ok: true,
+
+      item_id:
+        itemId,
+
+      paginas_consultadas:
+        pagina,
+
+      total_avaliacoes:
+        total,
+
+      terminou_naturalmente:
+        more === false,
+
+      ainda_existe_more:
+        more,
+
+      cursor_final:
+        cursor || null,
+
+      atingiu_1000:
+        total >= 1000,
+
+      atingiu_max_paginas:
+        pagina >= MAX_PAGINAS,
+
+      paginas
+    });
+
+  } catch (error) {
+    console.error(
+      "Erro diagnose-1000-item:",
+      error
+    );
+
+    return res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
