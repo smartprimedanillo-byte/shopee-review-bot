@@ -29,6 +29,17 @@ let scanState = {
   iniciadoEm: null
 };
 
+let diagnoseAllState = {
+  running: false,
+  concluido: false,
+  totalItens: 0,
+  itensProcessados: 0,
+  resultados: [],
+  erros: [],
+  iniciadoEm: null,
+  finalizadoEm: null
+};
+
 app.use(express.json());
 
 function gerarAssinatura(path, timestamp, accessToken, shopId) {
@@ -1341,6 +1352,346 @@ app.get("/diagnose-reset", (req, res) => {
     ok: true,
     message:
       "Diagnóstico zerado com sucesso."
+  });
+});
+
+async function executarDiagnosticoCompleto() {
+  try {
+    diagnoseAllState.running = true;
+    diagnoseAllState.concluido = false;
+    diagnoseAllState.totalItens = 0;
+    diagnoseAllState.itensProcessados = 0;
+    diagnoseAllState.resultados = [];
+    diagnoseAllState.erros = [];
+    diagnoseAllState.iniciadoEm = new Date().toISOString();
+    diagnoseAllState.finalizadoEm = null;
+
+    console.log("Iniciando diagnóstico completo...");
+
+    // ===================================
+    // 1. BUSCAR TODOS OS ITENS
+    // ===================================
+
+    const itemListPath =
+      "/api/v2/product/get_item_list";
+
+    let offset = 0;
+    const pageSize = 100;
+    let hasNextPage = true;
+
+    const itens = [];
+
+    while (hasNextPage) {
+      const timestamp =
+        Math.floor(Date.now() / 1000);
+
+      const sign = gerarAssinatura(
+        itemListPath,
+        timestamp,
+        authState.accessToken,
+        authState.shopId
+      );
+
+      const url =
+        `https://partner.shopeemobile.com${itemListPath}` +
+        `?partner_id=${PARTNER_ID}` +
+        `&timestamp=${timestamp}` +
+        `&access_token=${authState.accessToken}` +
+        `&shop_id=${authState.shopId}` +
+        `&sign=${sign}` +
+        `&offset=${offset}` +
+        `&page_size=${pageSize}` +
+        `&item_status=NORMAL`;
+
+      const response = await fetch(url);
+      const data = await response.json();
+
+      if (data.error) {
+        throw new Error(
+          `Erro get_item_list: ${JSON.stringify(data)}`
+        );
+      }
+
+      const lista =
+        data.response?.item || [];
+
+      itens.push(...lista);
+
+      hasNextPage =
+        data.response?.has_next_page === true;
+
+      offset =
+        data.response?.next_offset ??
+        offset + lista.length;
+
+      if (lista.length === 0) {
+        break;
+      }
+    }
+
+    diagnoseAllState.totalItens =
+      itens.length;
+
+    console.log(
+      `Itens encontrados: ${itens.length}`
+    );
+
+    // ===================================
+    // 2. BUSCAR AVALIAÇÕES ITEM POR ITEM
+    // ===================================
+
+    const commentPath =
+      "/api/v2/product/get_comment";
+
+    for (const item of itens) {
+      const itemId =
+        Number(item.item_id);
+
+      let cursor = "";
+      let more = true;
+      let totalItem = 0;
+
+      try {
+        while (more) {
+          const timestamp =
+            Math.floor(Date.now() / 1000);
+
+          const sign = gerarAssinatura(
+            commentPath,
+            timestamp,
+            authState.accessToken,
+            authState.shopId
+          );
+
+          let url =
+            `https://partner.shopeemobile.com${commentPath}` +
+            `?partner_id=${PARTNER_ID}` +
+            `&timestamp=${timestamp}` +
+            `&access_token=${authState.accessToken}` +
+            `&shop_id=${authState.shopId}` +
+            `&sign=${sign}` +
+            `&page_size=100` +
+            `&item_id=${itemId}`;
+
+          if (cursor) {
+            url +=
+              `&cursor=${encodeURIComponent(cursor)}`;
+          }
+
+          const response =
+            await fetch(url);
+
+          const data =
+            await response.json();
+
+          if (data.error) {
+            throw new Error(
+              JSON.stringify(data)
+            );
+          }
+
+          const lista =
+            data.response
+              ?.item_comment_list || [];
+
+          totalItem +=
+            lista.length;
+
+          more =
+            data.response?.more === true;
+
+          cursor =
+            data.response?.next_cursor || "";
+
+          if (more && !cursor) {
+            break;
+          }
+
+          if (totalItem >= 1000) {
+            break;
+          }
+        }
+
+        diagnoseAllState.resultados.push({
+          item_id: itemId,
+          total_avaliacoes: totalItem,
+          atingiu_limite:
+            totalItem >= 1000
+        });
+
+      } catch (error) {
+        diagnoseAllState.erros.push({
+          item_id: itemId,
+          erro: error.message
+        });
+      }
+
+      diagnoseAllState.itensProcessados++;
+
+      // Log a cada 50 itens
+      if (
+        diagnoseAllState.itensProcessados %
+          50 ===
+        0
+      ) {
+        console.log(
+          `Diagnóstico: ${diagnoseAllState.itensProcessados}/${diagnoseAllState.totalItens}`
+        );
+      }
+
+      // pequena pausa para não bombardear a API
+      await new Promise(resolve =>
+        setTimeout(resolve, 150)
+      );
+    }
+
+    diagnoseAllState.running = false;
+    diagnoseAllState.concluido = true;
+    diagnoseAllState.finalizadoEm =
+      new Date().toISOString();
+
+    console.log(
+      "Diagnóstico completo finalizado."
+    );
+
+  } catch (error) {
+    console.error(
+      "Erro no diagnóstico completo:"
+    );
+
+    console.error(error);
+
+    diagnoseAllState.running = false;
+    diagnoseAllState.concluido = false;
+
+    diagnoseAllState.erros.push({
+      geral: true,
+      erro: error.message
+    });
+  }
+}
+
+app.get("/diagnose-all", async (req, res) => {
+  if (
+    !authState.accessToken ||
+    !authState.shopId
+  ) {
+    return res.status(401).json({
+      ok: false,
+      message:
+        "Loja ainda não autorizada nesta execução."
+    });
+  }
+
+  if (
+    authState.expiresAt <= Date.now()
+  ) {
+    return res.status(401).json({
+      ok: false,
+      message:
+        "Access token expirado."
+    });
+  }
+
+  if (diagnoseAllState.running) {
+    return res.json({
+      ok: true,
+      message:
+        "Diagnóstico já está em execução.",
+      itens_processados:
+        diagnoseAllState.itensProcessados,
+      total_itens:
+        diagnoseAllState.totalItens
+    });
+  }
+
+  executarDiagnosticoCompleto();
+
+  return res.json({
+    ok: true,
+    message:
+      "Diagnóstico completo iniciado.",
+    status_url:
+      "/diagnose-status"
+  });
+});
+
+app.get("/diagnose-status", (req, res) => {
+  const ordenados =
+    [...diagnoseAllState.resultados]
+      .sort(
+        (a, b) =>
+          b.total_avaliacoes -
+          a.total_avaliacoes
+      );
+
+  const itensCom1000 =
+    ordenados.filter(
+      item =>
+        item.total_avaliacoes >= 1000
+    );
+
+  const itensCom500 =
+    ordenados.filter(
+      item =>
+        item.total_avaliacoes >= 500
+    );
+
+  let progresso = 0;
+
+  if (
+    diagnoseAllState.totalItens > 0
+  ) {
+    progresso =
+      (
+        diagnoseAllState
+          .itensProcessados /
+        diagnoseAllState.totalItens *
+        100
+      ).toFixed(1);
+  }
+
+  return res.json({
+    ok: true,
+
+    running:
+      diagnoseAllState.running,
+
+    concluido:
+      diagnoseAllState.concluido,
+
+    progresso_percentual:
+      Number(progresso),
+
+    total_itens:
+      diagnoseAllState.totalItens,
+
+    itens_processados:
+      diagnoseAllState.itensProcessados,
+
+    itens_com_1000:
+      itensCom1000.length,
+
+    itens_com_500_ou_mais:
+      itensCom500.length,
+
+    top_20_itens:
+      ordenados.slice(0, 20),
+
+    itens_no_limite:
+      itensCom1000,
+
+    erros:
+      diagnoseAllState.erros.length,
+
+    detalhes_erros:
+      diagnoseAllState.erros.slice(0, 20),
+
+    iniciado_em:
+      diagnoseAllState.iniciadoEm,
+
+    finalizado_em:
+      diagnoseAllState.finalizadoEm
   });
 });
 
