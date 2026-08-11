@@ -463,7 +463,9 @@ app.get("/pending-by-items-test", async (req, res) => {
       }
     }
 
-    const itensTeste = itens.slice(0, 10);
+   const itensTeste = [
+  { item_id: 22692791794 }
+];
 
     // ==========================
     // 2. BUSCAR AVALIAÇÕES
@@ -658,7 +660,7 @@ debug_avaliacoes_encontradas:
     comment: avaliacao.comment || "",
     tem_resposta: !!avaliacao.comment_reply
   }))
-  
+
     });
 
   } catch (error) {
