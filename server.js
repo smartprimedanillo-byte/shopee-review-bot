@@ -388,6 +388,280 @@ app.get("/items", async (req, res) => {
   }
 });
 
+app.get("/pending-by-items-test", async (req, res) => {
+  try {
+    if (!authState.accessToken || !authState.shopId) {
+      return res.status(401).json({
+        ok: false,
+        message: "Loja ainda não autorizada nesta execução."
+      });
+    }
+
+    if (authState.expiresAt <= Date.now()) {
+      return res.status(401).json({
+        ok: false,
+        message: "Access token expirado."
+      });
+    }
+
+    // ==========================
+    // 1. BUSCAR ITENS DA LOJA
+    // ==========================
+
+    const itemListPath = "/api/v2/product/get_item_list";
+
+    let offset = 0;
+    const itemPageSize = 100;
+    let hasNextPage = true;
+
+    const itens = [];
+
+    while (hasNextPage && itens.length < 10) {
+      const timestamp = Math.floor(Date.now() / 1000);
+
+      const sign = gerarAssinatura(
+        itemListPath,
+        timestamp,
+        authState.accessToken,
+        authState.shopId
+      );
+
+      const url =
+        `https://partner.shopeemobile.com${itemListPath}` +
+        `?partner_id=${PARTNER_ID}` +
+        `&timestamp=${timestamp}` +
+        `&access_token=${authState.accessToken}` +
+        `&shop_id=${authState.shopId}` +
+        `&sign=${sign}` +
+        `&offset=${offset}` +
+        `&page_size=${itemPageSize}` +
+        `&item_status=NORMAL`;
+
+      const response = await fetch(url);
+      const data = await response.json();
+
+      if (data.error) {
+        return res.status(400).json({
+          ok: false,
+          etapa: "get_item_list",
+          shopee_error: data
+        });
+      }
+
+      const lista = data.response?.item || [];
+
+      itens.push(...lista);
+
+      hasNextPage =
+        data.response?.has_next_page === true;
+
+      offset =
+        data.response?.next_offset ?? offset + lista.length;
+
+      if (lista.length === 0) {
+        break;
+      }
+    }
+
+    const itensTeste = itens.slice(0, 10);
+
+    // ==========================
+    // 2. BUSCAR AVALIAÇÕES
+    // ITEM POR ITEM
+    // ==========================
+
+    const commentPath = "/api/v2/product/get_comment";
+
+    const todasAvaliacoes = [];
+
+    const resumoItens = [];
+
+    for (const item of itensTeste) {
+      let cursor = "";
+      let more = true;
+
+      let totalItem = 0;
+
+      while (more) {
+        const timestamp = Math.floor(Date.now() / 1000);
+
+        const sign = gerarAssinatura(
+          commentPath,
+          timestamp,
+          authState.accessToken,
+          authState.shopId
+        );
+
+        let url =
+          `https://partner.shopeemobile.com${commentPath}` +
+          `?partner_id=${PARTNER_ID}` +
+          `&timestamp=${timestamp}` +
+          `&access_token=${authState.accessToken}` +
+          `&shop_id=${authState.shopId}` +
+          `&sign=${sign}` +
+          `&page_size=100` +
+          `&item_id=${item.item_id}`;
+
+        if (cursor) {
+          url += `&cursor=${encodeURIComponent(cursor)}`;
+        }
+
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (data.error) {
+          resumoItens.push({
+            item_id: item.item_id,
+            erro: data
+          });
+
+          break;
+        }
+
+        const lista =
+          data.response?.item_comment_list || [];
+
+        todasAvaliacoes.push(...lista);
+
+        totalItem += lista.length;
+
+        more =
+          data.response?.more === true;
+
+        cursor =
+          data.response?.next_cursor || "";
+
+        if (more && !cursor) {
+          break;
+        }
+      }
+
+      resumoItens.push({
+        item_id: item.item_id,
+        total_avaliacoes: totalItem
+      });
+    }
+
+    // ==========================
+    // 3. REMOVER DUPLICADAS
+    // ==========================
+
+    const mapa = new Map();
+
+    for (const avaliacao of todasAvaliacoes) {
+      mapa.set(
+        String(avaliacao.comment_id),
+        avaliacao
+      );
+    }
+
+    const avaliacoesUnicas =
+      Array.from(mapa.values());
+
+    // ==========================
+    // 4. FILTRAR PENDENTES
+    // ==========================
+
+    const pendentes =
+      avaliacoesUnicas.filter(
+        avaliacao => !avaliacao.comment_reply
+      );
+
+    // ==========================
+    // 5. RESUMO
+    // ==========================
+
+    const porEstrela = {
+      1: 0,
+      2: 0,
+      3: 0,
+      4: 0,
+      5: 0
+    };
+
+    let semComentario = 0;
+    let comComentario = 0;
+
+    for (const avaliacao of pendentes) {
+      const estrela =
+        Number(avaliacao.rating_star);
+
+      if (porEstrela[estrela] !== undefined) {
+        porEstrela[estrela]++;
+      }
+
+      if (
+        !avaliacao.comment ||
+        avaliacao.comment.trim() === ""
+      ) {
+        semComentario++;
+      } else {
+        comComentario++;
+      }
+    }
+
+    return res.json({
+      ok: true,
+
+      itens_testados:
+        itensTeste.length,
+
+      total_avaliacoes_encontradas:
+        todasAvaliacoes.length,
+
+      total_avaliacoes_unicas:
+        avaliacoesUnicas.length,
+
+      total_pendentes:
+        pendentes.length,
+
+      pendentes_sem_comentario:
+        semComentario,
+
+      pendentes_com_comentario:
+        comComentario,
+
+      pendentes_por_estrela:
+        porEstrela,
+
+      resumo_itens:
+        resumoItens,
+
+      amostra_pendentes:
+        pendentes
+          .slice(0, 20)
+          .map(avaliacao => ({
+            comment_id:
+              avaliacao.comment_id,
+
+            item_id:
+              avaliacao.item_id,
+
+            buyer_username:
+              avaliacao.buyer_username,
+
+            rating_star:
+              avaliacao.rating_star,
+
+            comment:
+              avaliacao.comment || ""
+          }))
+    });
+
+  } catch (error) {
+    console.error(
+      "Erro no teste item por item:"
+    );
+
+    console.error(error);
+
+    return res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
