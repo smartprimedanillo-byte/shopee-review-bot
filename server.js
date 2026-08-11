@@ -15,6 +15,13 @@ let authState = {
   expiresAt: null
 };
 
+let itemDiagnosticState = {
+  itensProcessados: new Set(),
+  resultados: [],
+  erros: [],
+  iniciadoEm: null
+};
+
 let scanState = {
   comentarios: new Map(),
   itensProcessados: new Set(),
@@ -1039,6 +1046,301 @@ app.get("/scan-reset", (req, res) => {
     ok: true,
     message:
       "Scanner zerado com sucesso."
+  });
+});
+
+app.get("/diagnose-item-limits", async (req, res) => {
+  try {
+    if (!authState.accessToken || !authState.shopId) {
+      return res.status(401).json({
+        ok: false,
+        message: "Loja ainda não autorizada nesta execução."
+      });
+    }
+
+    if (authState.expiresAt <= Date.now()) {
+      return res.status(401).json({
+        ok: false,
+        message: "Access token expirado."
+      });
+    }
+
+    const start = Math.max(
+      0,
+      Number(req.query.start) || 0
+    );
+
+    const limit = Math.min(
+      50,
+      Math.max(1, Number(req.query.limit) || 50)
+    );
+
+    // ====================================
+    // 1. BUSCAR TODOS OS ITENS
+    // ====================================
+
+    const itemListPath =
+      "/api/v2/product/get_item_list";
+
+    let offset = 0;
+    const itemPageSize = 100;
+    let hasNextPage = true;
+
+    const itens = [];
+
+    while (hasNextPage) {
+      const timestamp =
+        Math.floor(Date.now() / 1000);
+
+      const sign = gerarAssinatura(
+        itemListPath,
+        timestamp,
+        authState.accessToken,
+        authState.shopId
+      );
+
+      const url =
+        `https://partner.shopeemobile.com${itemListPath}` +
+        `?partner_id=${PARTNER_ID}` +
+        `&timestamp=${timestamp}` +
+        `&access_token=${authState.accessToken}` +
+        `&shop_id=${authState.shopId}` +
+        `&sign=${sign}` +
+        `&offset=${offset}` +
+        `&page_size=${itemPageSize}` +
+        `&item_status=NORMAL`;
+
+      const response = await fetch(url);
+      const data = await response.json();
+
+      if (data.error) {
+        return res.status(400).json({
+          ok: false,
+          etapa: "get_item_list",
+          shopee_error: data
+        });
+      }
+
+      const lista =
+        data.response?.item || [];
+
+      itens.push(...lista);
+
+      hasNextPage =
+        data.response?.has_next_page === true;
+
+      offset =
+        data.response?.next_offset ??
+        offset + lista.length;
+
+      if (lista.length === 0) {
+        break;
+      }
+    }
+
+    // ====================================
+    // 2. PROCESSAR O LOTE
+    // ====================================
+
+    const lote = itens.slice(
+      start,
+      start + limit
+    );
+
+    if (!itemDiagnosticState.iniciadoEm) {
+      itemDiagnosticState.iniciadoEm =
+        new Date().toISOString();
+    }
+
+    const commentPath =
+      "/api/v2/product/get_comment";
+
+    for (const item of lote) {
+      const itemId = Number(item.item_id);
+
+      if (
+        itemDiagnosticState.itensProcessados.has(
+          String(itemId)
+        )
+      ) {
+        continue;
+      }
+
+      let cursor = "";
+      let more = true;
+      let totalItem = 0;
+
+      try {
+        while (more) {
+          const timestamp =
+            Math.floor(Date.now() / 1000);
+
+          const sign = gerarAssinatura(
+            commentPath,
+            timestamp,
+            authState.accessToken,
+            authState.shopId
+          );
+
+          let url =
+            `https://partner.shopeemobile.com${commentPath}` +
+            `?partner_id=${PARTNER_ID}` +
+            `&timestamp=${timestamp}` +
+            `&access_token=${authState.accessToken}` +
+            `&shop_id=${authState.shopId}` +
+            `&sign=${sign}` +
+            `&page_size=100` +
+            `&item_id=${itemId}`;
+
+          if (cursor) {
+            url +=
+              `&cursor=${encodeURIComponent(cursor)}`;
+          }
+
+          const response = await fetch(url);
+          const data = await response.json();
+
+          if (data.error) {
+            throw new Error(
+              JSON.stringify(data)
+            );
+          }
+
+          const lista =
+            data.response?.item_comment_list || [];
+
+          totalItem += lista.length;
+
+          more =
+            data.response?.more === true;
+
+          cursor =
+            data.response?.next_cursor || "";
+
+          if (more && !cursor) {
+            break;
+          }
+
+          // Segurança: teto oficial
+          if (totalItem >= 1000) {
+            break;
+          }
+        }
+
+        itemDiagnosticState.resultados.push({
+          item_id: itemId,
+          total_avaliacoes: totalItem,
+          atingiu_limite:
+            totalItem >= 1000
+        });
+
+        itemDiagnosticState.itensProcessados.add(
+          String(itemId)
+        );
+
+      } catch (error) {
+        itemDiagnosticState.erros.push({
+          item_id: itemId,
+          erro: error.message
+        });
+      }
+
+      await new Promise(resolve =>
+        setTimeout(resolve, 150)
+      );
+    }
+
+    // ====================================
+    // 3. RESUMO
+    // ====================================
+
+    const ordenados =
+      [...itemDiagnosticState.resultados]
+        .sort(
+          (a, b) =>
+            b.total_avaliacoes -
+            a.total_avaliacoes
+        );
+
+    const itensNoLimite =
+      ordenados.filter(
+        item => item.atingiu_limite
+      );
+
+    const acima500 =
+      ordenados.filter(
+        item =>
+          item.total_avaliacoes >= 500
+      );
+
+    const proximoStart =
+      start + lote.length;
+
+    const concluido =
+      proximoStart >= itens.length;
+
+    return res.json({
+      ok: true,
+
+      concluido,
+
+      total_itens_loja:
+        itens.length,
+
+      itens_processados:
+        itemDiagnosticState
+          .itensProcessados.size,
+
+      itens_com_1000:
+        itensNoLimite.length,
+
+      itens_com_500_ou_mais:
+        acima500.length,
+
+      top_20_itens:
+        ordenados.slice(0, 20),
+
+      itens_no_limite:
+        itensNoLimite,
+
+      erros:
+        itemDiagnosticState.erros.length,
+
+      proximo_start:
+        concluido
+          ? null
+          : proximoStart,
+
+      iniciado_em:
+        itemDiagnosticState.iniciadoEm
+    });
+
+  } catch (error) {
+    console.error(
+      "Erro no diagnóstico de itens:"
+    );
+
+    console.error(error);
+
+    return res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
+
+app.get("/diagnose-reset", (req, res) => {
+  itemDiagnosticState = {
+    itensProcessados: new Set(),
+    resultados: [],
+    erros: [],
+    iniciadoEm: null
+  };
+
+  return res.json({
+    ok: true,
+    message:
+      "Diagnóstico zerado com sucesso."
   });
 });
 
