@@ -154,12 +154,13 @@ app.get("/reviews", async (req, res) => {
     );
 
     const url =
-      `https://partner.shopeemobile.com${path}` +
-      `?partner_id=${PARTNER_ID}` +
-      `&timestamp=${timestamp}` +
-      `&access_token=${authState.accessToken}` +
-      `&shop_id=${authState.shopId}` +
-      `&sign=${sign}`;
+  `https://partner.shopeemobile.com${path}` +
+  `?partner_id=${PARTNER_ID}` +
+  `&timestamp=${timestamp}` +
+  `&access_token=${authState.accessToken}` +
+  `&shop_id=${authState.shopId}` +
+  `&sign=${sign}` +
+  `&page_size=20`;
 
     const response = await fetch(url);
 
