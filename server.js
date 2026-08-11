@@ -2904,6 +2904,132 @@ app.get("/diagnose-1000-pending", async (req, res) => {
   }
 });
 
+app.get("/test-reply-candidate", async (req, res) => {
+  try {
+    if (!authState.accessToken || !authState.shopId) {
+      return res.status(401).json({
+        ok: false,
+        message: "Loja ainda não autorizada nesta execução."
+      });
+    }
+
+    if (authState.expiresAt <= Date.now()) {
+      return res.status(401).json({
+        ok: false,
+        message: "Access token expirado."
+      });
+    }
+
+    const path = "/api/v2/product/get_comment";
+
+    const timestamp = Math.floor(Date.now() / 1000);
+
+    const sign = gerarAssinatura(
+      path,
+      timestamp,
+      authState.accessToken,
+      authState.shopId
+    );
+
+    const url =
+      `https://partner.shopeemobile.com${path}` +
+      `?partner_id=${PARTNER_ID}` +
+      `&timestamp=${timestamp}` +
+      `&access_token=${authState.accessToken}` +
+      `&shop_id=${authState.shopId}` +
+      `&sign=${sign}` +
+      `&page_size=100`;
+
+    const response = await fetch(url);
+    const data = await response.json();
+
+    if (data.error) {
+      return res.status(400).json({
+        ok: false,
+        shopee_error: data
+      });
+    }
+
+    const lista =
+      data.response?.item_comment_list || [];
+
+    const candidata = lista.find(avaliacao => {
+      const semResposta =
+        !avaliacao.comment_reply;
+
+      const cincoEstrelas =
+        Number(avaliacao.rating_star) === 5;
+
+      const semComentario =
+        !avaliacao.comment ||
+        avaliacao.comment.trim() === "";
+
+      return (
+        semResposta &&
+        cincoEstrelas &&
+        semComentario
+      );
+    });
+
+    if (!candidata) {
+      return res.json({
+        ok: true,
+        encontrada: false,
+        message:
+          "Nenhuma avaliação 5 estrelas, sem comentário e sem resposta encontrada nesta página."
+      });
+    }
+
+    return res.json({
+      ok: true,
+
+      encontrada: true,
+
+      ATENCAO:
+        "Esta rota NÃO respondeu a avaliação.",
+
+      candidata: {
+        comment_id:
+          candidata.comment_id,
+
+        item_id:
+          candidata.item_id,
+
+        buyer_username:
+          candidata.buyer_username,
+
+        rating_star:
+          candidata.rating_star,
+
+        comment:
+          candidata.comment || "",
+
+        editable:
+          candidata.editable,
+
+        create_time:
+          candidata.create_time,
+
+        data_iso:
+          new Date(
+            Number(candidata.create_time) * 1000
+          ).toISOString()
+      }
+    });
+
+  } catch (error) {
+    console.error(
+      "Erro test-reply-candidate:",
+      error
+    );
+
+    return res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
