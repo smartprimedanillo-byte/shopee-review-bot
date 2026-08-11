@@ -15,6 +15,13 @@ let authState = {
   expiresAt: null
 };
 
+let scanState = {
+  comentarios: new Map(),
+  itensProcessados: new Set(),
+  erros: [],
+  iniciadoEm: null
+};
+
 app.use(express.json());
 
 function gerarAssinatura(path, timestamp, accessToken, shopId) {
@@ -675,6 +682,364 @@ debug_avaliacoes_encontradas:
       message: error.message
     });
   }
+});
+
+app.get("/scan-pending", async (req, res) => {
+  try {
+    if (!authState.accessToken || !authState.shopId) {
+      return res.status(401).json({
+        ok: false,
+        message: "Loja ainda não autorizada nesta execução."
+      });
+    }
+
+    if (authState.expiresAt <= Date.now()) {
+      return res.status(401).json({
+        ok: false,
+        message: "Access token expirado."
+      });
+    }
+
+    // ==========================
+    // PARÂMETROS DO LOTE
+    // ==========================
+
+    const start = Math.max(
+      0,
+      Number(req.query.start) || 0
+    );
+
+    const limit = Math.min(
+      50,
+      Math.max(1, Number(req.query.limit) || 50)
+    );
+
+    // ==========================
+    // 1. BUSCAR TODOS OS ITENS
+    // ==========================
+
+    const itemListPath =
+      "/api/v2/product/get_item_list";
+
+    let offset = 0;
+    const itemPageSize = 100;
+    let hasNextPage = true;
+
+    const itens = [];
+
+    while (hasNextPage) {
+      const timestamp =
+        Math.floor(Date.now() / 1000);
+
+      const sign = gerarAssinatura(
+        itemListPath,
+        timestamp,
+        authState.accessToken,
+        authState.shopId
+      );
+
+      const url =
+        `https://partner.shopeemobile.com${itemListPath}` +
+        `?partner_id=${PARTNER_ID}` +
+        `&timestamp=${timestamp}` +
+        `&access_token=${authState.accessToken}` +
+        `&shop_id=${authState.shopId}` +
+        `&sign=${sign}` +
+        `&offset=${offset}` +
+        `&page_size=${itemPageSize}` +
+        `&item_status=NORMAL`;
+
+      const response = await fetch(url);
+      const data = await response.json();
+
+      if (data.error) {
+        return res.status(400).json({
+          ok: false,
+          etapa: "get_item_list",
+          shopee_error: data
+        });
+      }
+
+      const lista =
+        data.response?.item || [];
+
+      itens.push(...lista);
+
+      hasNextPage =
+        data.response?.has_next_page === true;
+
+      offset =
+        data.response?.next_offset ??
+        offset + lista.length;
+
+      if (lista.length === 0) {
+        break;
+      }
+    }
+
+    // ==========================
+    // 2. DEFINIR O LOTE
+    // ==========================
+
+    const lote = itens.slice(
+      start,
+      start + limit
+    );
+
+    if (lote.length === 0) {
+      return res.json({
+        ok: true,
+        concluido: true,
+        message:
+          "Não existem mais itens nesse intervalo.",
+        total_itens_loja: itens.length,
+        proximo_start: null
+      });
+    }
+
+    if (!scanState.iniciadoEm) {
+      scanState.iniciadoEm =
+        new Date().toISOString();
+    }
+
+    const commentPath =
+      "/api/v2/product/get_comment";
+
+    let avaliacoesNesteLote = 0;
+    let itensComAvaliacao = 0;
+
+    // ==========================
+    // 3. PROCESSAR ITEM A ITEM
+    // ==========================
+
+    for (const item of lote) {
+      const itemId = Number(item.item_id);
+
+      // Não repetir item já processado
+      if (
+        scanState.itensProcessados.has(
+          String(itemId)
+        )
+      ) {
+        continue;
+      }
+
+      let cursor = "";
+      let more = true;
+      let totalItem = 0;
+
+      try {
+        while (more) {
+          const timestamp =
+            Math.floor(Date.now() / 1000);
+
+          const sign = gerarAssinatura(
+            commentPath,
+            timestamp,
+            authState.accessToken,
+            authState.shopId
+          );
+
+          let url =
+            `https://partner.shopeemobile.com${commentPath}` +
+            `?partner_id=${PARTNER_ID}` +
+            `&timestamp=${timestamp}` +
+            `&access_token=${authState.accessToken}` +
+            `&shop_id=${authState.shopId}` +
+            `&sign=${sign}` +
+            `&page_size=100` +
+            `&item_id=${itemId}`;
+
+          if (cursor) {
+            url +=
+              `&cursor=${encodeURIComponent(cursor)}`;
+          }
+
+          const response = await fetch(url);
+          const data = await response.json();
+
+          if (data.error) {
+            throw new Error(
+              JSON.stringify(data)
+            );
+          }
+
+          const lista =
+            data.response?.item_comment_list ||
+            [];
+
+          for (const avaliacao of lista) {
+            scanState.comentarios.set(
+              String(avaliacao.comment_id),
+              avaliacao
+            );
+          }
+
+          totalItem += lista.length;
+
+          more =
+            data.response?.more === true;
+
+          cursor =
+            data.response?.next_cursor || "";
+
+          if (more && !cursor) {
+            break;
+          }
+        }
+
+        if (totalItem > 0) {
+          itensComAvaliacao++;
+        }
+
+        avaliacoesNesteLote += totalItem;
+
+        scanState.itensProcessados.add(
+          String(itemId)
+        );
+
+      } catch (error) {
+        scanState.erros.push({
+          item_id: itemId,
+          erro: error.message
+        });
+      }
+
+      // Pequeno intervalo entre itens
+      await new Promise(resolve =>
+        setTimeout(resolve, 150)
+      );
+    }
+
+    // ==========================
+    // 4. CONSOLIDAR
+    // ==========================
+
+    const todasAvaliacoes =
+      Array.from(
+        scanState.comentarios.values()
+      );
+
+    const pendentes =
+      todasAvaliacoes.filter(
+        avaliacao =>
+          !avaliacao.comment_reply
+      );
+
+    let semComentario = 0;
+    let comComentario = 0;
+
+    const porEstrela = {
+      1: 0,
+      2: 0,
+      3: 0,
+      4: 0,
+      5: 0
+    };
+
+    for (const avaliacao of pendentes) {
+      const estrela =
+        Number(avaliacao.rating_star);
+
+      if (
+        porEstrela[estrela] !== undefined
+      ) {
+        porEstrela[estrela]++;
+      }
+
+      if (
+        !avaliacao.comment ||
+        avaliacao.comment.trim() === ""
+      ) {
+        semComentario++;
+      } else {
+        comComentario++;
+      }
+    }
+
+    const proximoStart =
+      start + lote.length;
+
+    const concluido =
+      proximoStart >= itens.length;
+
+    return res.json({
+      ok: true,
+
+      concluido,
+
+      lote: {
+        start,
+        limit,
+        itens_no_lote: lote.length,
+        itens_com_avaliacao:
+          itensComAvaliacao,
+        avaliacoes_encontradas:
+          avaliacoesNesteLote
+      },
+
+      acumulado: {
+        total_itens_loja:
+          itens.length,
+
+        itens_processados:
+          scanState.itensProcessados.size,
+
+        avaliacoes_unicas:
+          todasAvaliacoes.length,
+
+        total_pendentes:
+          pendentes.length,
+
+        pendentes_sem_comentario:
+          semComentario,
+
+        pendentes_com_comentario:
+          comComentario,
+
+        pendentes_por_estrela:
+          porEstrela,
+
+        erros:
+          scanState.erros.length
+      },
+
+      proximo_start:
+        concluido
+          ? null
+          : proximoStart,
+
+      iniciado_em:
+        scanState.iniciadoEm
+    });
+
+  } catch (error) {
+    console.error(
+      "Erro no scanner:"
+    );
+
+    console.error(error);
+
+    return res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
+
+app.get("/scan-reset", (req, res) => {
+  scanState = {
+    comentarios: new Map(),
+    itensProcessados: new Set(),
+    erros: [],
+    iniciadoEm: null
+  };
+
+  return res.json({
+    ok: true,
+    message:
+      "Scanner zerado com sucesso."
+  });
 });
 
 app.listen(PORT, () => {
