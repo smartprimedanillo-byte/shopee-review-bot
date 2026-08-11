@@ -1695,6 +1695,146 @@ app.get("/diagnose-status", (req, res) => {
   });
 });
 
+app.get("/item-status-diagnostic", async (req, res) => {
+  try {
+    if (!authState.accessToken || !authState.shopId) {
+      return res.status(401).json({
+        ok: false,
+        message: "Loja ainda não autorizada nesta execução."
+      });
+    }
+
+    if (authState.expiresAt <= Date.now()) {
+      return res.status(401).json({
+        ok: false,
+        message: "Access token expirado."
+      });
+    }
+
+    const path = "/api/v2/product/get_item_list";
+
+    const statusParaTestar = [
+      "NORMAL",
+      "BANNED",
+      "DELETED",
+      "UNLIST"
+    ];
+
+    const resultados = [];
+
+    for (const status of statusParaTestar) {
+      let offset = 0;
+      const pageSize = 100;
+      let hasNextPage = true;
+
+      const itens = [];
+
+      try {
+        while (hasNextPage) {
+          const timestamp = Math.floor(Date.now() / 1000);
+
+          const sign = gerarAssinatura(
+            path,
+            timestamp,
+            authState.accessToken,
+            authState.shopId
+          );
+
+          const url =
+            `https://partner.shopeemobile.com${path}` +
+            `?partner_id=${PARTNER_ID}` +
+            `&timestamp=${timestamp}` +
+            `&access_token=${authState.accessToken}` +
+            `&shop_id=${authState.shopId}` +
+            `&sign=${sign}` +
+            `&offset=${offset}` +
+            `&page_size=${pageSize}` +
+            `&item_status=${status}`;
+
+          const response = await fetch(url);
+          const data = await response.json();
+
+          if (data.error) {
+            resultados.push({
+              status,
+              suportado: false,
+              erro: data
+            });
+
+            break;
+          }
+
+          const lista = data.response?.item || [];
+
+          itens.push(...lista);
+
+          hasNextPage =
+            data.response?.has_next_page === true;
+
+          offset =
+            data.response?.next_offset ??
+            offset + lista.length;
+
+          if (lista.length === 0) {
+            break;
+          }
+        }
+
+        if (
+          !resultados.some(
+            resultado =>
+              resultado.status === status &&
+              resultado.suportado === false
+          )
+        ) {
+          resultados.push({
+            status,
+            suportado: true,
+            total_itens: itens.length,
+            amostra_item_ids: itens
+              .slice(0, 10)
+              .map(item => item.item_id)
+          });
+        }
+
+      } catch (error) {
+        resultados.push({
+          status,
+          suportado: false,
+          erro: error.message
+        });
+      }
+    }
+
+    const totalEncontrado = resultados
+      .filter(resultado => resultado.suportado)
+      .reduce(
+        (total, resultado) =>
+          total + (resultado.total_itens || 0),
+        0
+      );
+
+    return res.json({
+      ok: true,
+      total_itens_encontrados:
+        totalEncontrado,
+      resultados
+    });
+
+  } catch (error) {
+    console.error(
+      "Erro no diagnóstico de status:"
+    );
+
+    console.error(error);
+
+    return res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
