@@ -2210,6 +2210,284 @@ app.get("/scan-all-reviews", (req, res) => {
   });
 });
 
+app.get("/scan-all-status", (req, res) => {
+  const avaliacoes =
+    Array.from(
+      fullReviewScanState
+        .comentarios
+        .values()
+    );
+
+  const pendentes =
+    avaliacoes.filter(
+      avaliacao =>
+        !avaliacao.comment_reply
+    );
+
+  const porEstrela = {
+    1: 0,
+    2: 0,
+    3: 0,
+    4: 0,
+    5: 0
+  };
+
+  const pendentesPorStatus = {
+    NORMAL: 0,
+    DELETED: 0,
+    UNLIST: 0
+  };
+
+  let semComentario = 0;
+  let comComentario = 0;
+
+  for (const avaliacao of pendentes) {
+    const estrela =
+      Number(avaliacao.rating_star);
+
+    if (
+      porEstrela[estrela] !== undefined
+    ) {
+      porEstrela[estrela]++;
+    }
+
+    const status =
+      avaliacao.item_status;
+
+    if (
+      pendentesPorStatus[status]
+      !== undefined
+    ) {
+      pendentesPorStatus[status]++;
+    }
+
+    if (
+      !avaliacao.comment ||
+      avaliacao.comment.trim() === ""
+    ) {
+      semComentario++;
+    } else {
+      comComentario++;
+    }
+  }
+
+  let progresso = 0;
+
+  if (
+    fullReviewScanState.totalItens > 0
+  ) {
+    progresso =
+      (
+        fullReviewScanState
+          .itensProcessados /
+        fullReviewScanState.totalItens *
+        100
+      ).toFixed(1);
+  }
+
+  return res.json({
+    ok: true,
+
+    running:
+      fullReviewScanState.running,
+
+    concluido:
+      fullReviewScanState.concluido,
+
+    progresso_percentual:
+      Number(progresso),
+
+    total_itens:
+      fullReviewScanState.totalItens,
+
+    itens_processados:
+      fullReviewScanState
+        .itensProcessados,
+
+    itens_por_status:
+      fullReviewScanState
+        .itensPorStatus,
+
+    itens_processados_por_status:
+      fullReviewScanState
+        .itensProcessadosPorStatus,
+
+    avaliacoes_unicas:
+      avaliacoes.length,
+
+    total_pendentes:
+      pendentes.length,
+
+    pendentes_sem_comentario:
+      semComentario,
+
+    pendentes_com_comentario:
+      comComentario,
+
+    pendentes_por_estrela:
+      porEstrela,
+
+    pendentes_por_status:
+      pendentesPorStatus,
+
+    erros:
+      fullReviewScanState
+        .erros.length,
+
+    detalhes_erros:
+      fullReviewScanState
+        .erros
+        .slice(0, 20),
+
+    iniciado_em:
+      fullReviewScanState
+        .iniciadoEm,
+
+    finalizado_em:
+      fullReviewScanState
+        .finalizadoEm
+  });
+});
+
+app.get("/scan-all-status", (req, res) => {
+  const avaliacoes =
+    Array.from(
+      fullReviewScanState
+        .comentarios
+        .values()
+    );
+
+  const pendentes =
+    avaliacoes.filter(
+      avaliacao =>
+        !avaliacao.comment_reply
+    );
+
+  const porEstrela = {
+    1: 0,
+    2: 0,
+    3: 0,
+    4: 0,
+    5: 0
+  };
+
+  const pendentesPorStatus = {
+    NORMAL: 0,
+    DELETED: 0,
+    UNLIST: 0
+  };
+
+  let semComentario = 0;
+  let comComentario = 0;
+
+  for (const avaliacao of pendentes) {
+    const estrela =
+      Number(avaliacao.rating_star);
+
+    if (
+      porEstrela[estrela] !== undefined
+    ) {
+      porEstrela[estrela]++;
+    }
+
+    const status =
+      avaliacao.item_status;
+
+    if (
+      pendentesPorStatus[status]
+      !== undefined
+    ) {
+      pendentesPorStatus[status]++;
+    }
+
+    if (
+      !avaliacao.comment ||
+      avaliacao.comment.trim() === ""
+    ) {
+      semComentario++;
+    } else {
+      comComentario++;
+    }
+  }
+
+  let progresso = 0;
+
+  if (
+    fullReviewScanState.totalItens > 0
+  ) {
+    progresso =
+      (
+        fullReviewScanState
+          .itensProcessados /
+        fullReviewScanState.totalItens *
+        100
+      ).toFixed(1);
+  }
+
+  return res.json({
+    ok: true,
+
+    running:
+      fullReviewScanState.running,
+
+    concluido:
+      fullReviewScanState.concluido,
+
+    progresso_percentual:
+      Number(progresso),
+
+    total_itens:
+      fullReviewScanState.totalItens,
+
+    itens_processados:
+      fullReviewScanState
+        .itensProcessados,
+
+    itens_por_status:
+      fullReviewScanState
+        .itensPorStatus,
+
+    itens_processados_por_status:
+      fullReviewScanState
+        .itensProcessadosPorStatus,
+
+    avaliacoes_unicas:
+      avaliacoes.length,
+
+    total_pendentes:
+      pendentes.length,
+
+    pendentes_sem_comentario:
+      semComentario,
+
+    pendentes_com_comentario:
+      comComentario,
+
+    pendentes_por_estrela:
+      porEstrela,
+
+    pendentes_por_status:
+      pendentesPorStatus,
+
+    erros:
+      fullReviewScanState
+        .erros.length,
+
+    detalhes_erros:
+      fullReviewScanState
+        .erros
+        .slice(0, 20),
+
+    iniciado_em:
+      fullReviewScanState
+        .iniciadoEm,
+
+    finalizado_em:
+      fullReviewScanState
+        .finalizadoEm
+  });
+});
+
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
