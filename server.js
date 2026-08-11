@@ -297,6 +297,97 @@ app.get("/pending-reviews", async (req, res) => {
   }
 });
 
+app.get("/items", async (req, res) => {
+  try {
+    if (!authState.accessToken || !authState.shopId) {
+      return res.status(401).json({
+        ok: false,
+        message: "Loja ainda não autorizada nesta execução."
+      });
+    }
+
+    if (authState.expiresAt <= Date.now()) {
+      return res.status(401).json({
+        ok: false,
+        message: "Access token expirado."
+      });
+    }
+
+    const path = "/api/v2/product/get_item_list";
+
+    let offset = 0;
+    const pageSize = 100;
+    let hasNextPage = true;
+
+    const itens = [];
+
+    while (hasNextPage) {
+      const timestamp = Math.floor(Date.now() / 1000);
+
+      const sign = gerarAssinatura(
+        path,
+        timestamp,
+        authState.accessToken,
+        authState.shopId
+      );
+
+      const url =
+        `https://partner.shopeemobile.com${path}` +
+        `?partner_id=${PARTNER_ID}` +
+        `&timestamp=${timestamp}` +
+        `&access_token=${authState.accessToken}` +
+        `&shop_id=${authState.shopId}` +
+        `&sign=${sign}` +
+        `&offset=${offset}` +
+        `&page_size=${pageSize}` +
+        `&item_status=NORMAL`;
+
+      const response = await fetch(url);
+      const data = await response.json();
+
+      if (data.error) {
+        return res.status(400).json({
+          ok: false,
+          shopee_error: data
+        });
+      }
+
+      const lista = data.response?.item || [];
+
+      itens.push(...lista);
+
+      hasNextPage =
+        data.response?.has_next_page === true;
+
+      offset =
+        data.response?.next_offset ?? offset + lista.length;
+
+      if (lista.length === 0) {
+        break;
+      }
+    }
+
+    return res.json({
+      ok: true,
+      total_itens: itens.length,
+      itens: itens.map(item => ({
+        item_id: item.item_id,
+        item_status: item.item_status,
+        update_time: item.update_time
+      }))
+    });
+
+  } catch (error) {
+    console.error("Erro ao buscar itens:");
+    console.error(error);
+
+    return res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
