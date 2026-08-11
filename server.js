@@ -646,6 +646,19 @@ app.get("/pending-by-items-test", async (req, res) => {
             comment:
               avaliacao.comment || ""
           }))
+
+          ,
+
+debug_avaliacoes_encontradas:
+  todasAvaliacoes.map(avaliacao => ({
+    comment_id: avaliacao.comment_id,
+    item_id: avaliacao.item_id,
+    buyer_username: avaliacao.buyer_username,
+    rating_star: avaliacao.rating_star,
+    comment: avaliacao.comment || "",
+    tem_resposta: !!avaliacao.comment_reply
+  }))
+  
     });
 
   } catch (error) {
