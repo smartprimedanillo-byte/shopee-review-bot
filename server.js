@@ -2676,6 +2676,234 @@ app.get("/diagnose-1000-item", async (req, res) => {
   }
 });
 
+app.get("/diagnose-1000-pending", async (req, res) => {
+  try {
+    if (!authState.accessToken || !authState.shopId) {
+      return res.status(401).json({
+        ok: false,
+        message: "Loja ainda não autorizada nesta execução."
+      });
+    }
+
+    if (authState.expiresAt <= Date.now()) {
+      return res.status(401).json({
+        ok: false,
+        message: "Access token expirado."
+      });
+    }
+
+    const itemId = 18796892743;
+    const path = "/api/v2/product/get_comment";
+
+    let cursor = "";
+    let more = true;
+
+    const avaliacoes = new Map();
+
+    while (more) {
+      const timestamp =
+        Math.floor(Date.now() / 1000);
+
+      const sign = gerarAssinatura(
+        path,
+        timestamp,
+        authState.accessToken,
+        authState.shopId
+      );
+
+      let url =
+        `https://partner.shopeemobile.com${path}` +
+        `?partner_id=${PARTNER_ID}` +
+        `&timestamp=${timestamp}` +
+        `&access_token=${authState.accessToken}` +
+        `&shop_id=${authState.shopId}` +
+        `&sign=${sign}` +
+        `&page_size=100` +
+        `&item_id=${itemId}`;
+
+      if (cursor) {
+        url +=
+          `&cursor=${encodeURIComponent(cursor)}`;
+      }
+
+      const response = await fetch(url);
+      const data = await response.json();
+
+      if (data.error) {
+        return res.status(400).json({
+          ok: false,
+          shopee_error: data
+        });
+      }
+
+      const lista =
+        data.response?.item_comment_list || [];
+
+      for (const avaliacao of lista) {
+        avaliacoes.set(
+          String(avaliacao.comment_id),
+          avaliacao
+        );
+      }
+
+      more =
+        data.response?.more === true;
+
+      const novoCursor =
+        data.response?.next_cursor || "";
+
+      if (more && !novoCursor) {
+        break;
+      }
+
+      if (novoCursor === cursor && more) {
+        break;
+      }
+
+      cursor = novoCursor;
+    }
+
+    // =====================================
+    // CONSOLIDAÇÃO
+    // =====================================
+
+    const todas =
+      Array.from(avaliacoes.values());
+
+    const pendentes =
+      todas.filter(
+        avaliacao => !avaliacao.comment_reply
+      );
+
+    const respondidas =
+      todas.filter(
+        avaliacao => !!avaliacao.comment_reply
+      );
+
+    const porEstrela = {
+      1: 0,
+      2: 0,
+      3: 0,
+      4: 0,
+      5: 0
+    };
+
+    let pendentesSemComentario = 0;
+    let pendentesComComentario = 0;
+
+    for (const avaliacao of pendentes) {
+      const estrela =
+        Number(avaliacao.rating_star);
+
+      if (porEstrela[estrela] !== undefined) {
+        porEstrela[estrela]++;
+      }
+
+      if (
+        !avaliacao.comment ||
+        avaliacao.comment.trim() === ""
+      ) {
+        pendentesSemComentario++;
+      } else {
+        pendentesComComentario++;
+      }
+    }
+
+    // =====================================
+    // DATAS
+    // =====================================
+
+    const ordenadas =
+      [...todas].sort(
+        (a, b) =>
+          Number(a.create_time) -
+          Number(b.create_time)
+      );
+
+    const maisAntiga =
+      ordenadas.length > 0
+        ? ordenadas[0]
+        : null;
+
+    const maisNova =
+      ordenadas.length > 0
+        ? ordenadas[ordenadas.length - 1]
+        : null;
+
+    function formatarAvaliacao(avaliacao) {
+      if (!avaliacao) {
+        return null;
+      }
+
+      return {
+        comment_id:
+          avaliacao.comment_id,
+
+        create_time:
+          avaliacao.create_time,
+
+        data_iso:
+          new Date(
+            Number(avaliacao.create_time) * 1000
+          ).toISOString(),
+
+        rating_star:
+          avaliacao.rating_star,
+
+        tem_comentario:
+          !!(
+            avaliacao.comment &&
+            avaliacao.comment.trim()
+          ),
+
+        respondida:
+          !!avaliacao.comment_reply
+      };
+    }
+
+    return res.json({
+      ok: true,
+
+      item_id: itemId,
+
+      total_acessivel:
+        todas.length,
+
+      total_pendentes:
+        pendentes.length,
+
+      total_respondidas:
+        respondidas.length,
+
+      pendentes_sem_comentario:
+        pendentesSemComentario,
+
+      pendentes_com_comentario:
+        pendentesComComentario,
+
+      pendentes_por_estrela:
+        porEstrela,
+
+      avaliacao_mais_antiga_acessivel:
+        formatarAvaliacao(maisAntiga),
+
+      avaliacao_mais_nova_acessivel:
+        formatarAvaliacao(maisNova)
+    });
+
+  } catch (error) {
+    console.error(
+      "Erro diagnose-1000-pending:",
+      error
+    );
+
+    return res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
