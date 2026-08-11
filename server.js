@@ -40,6 +40,33 @@ let diagnoseAllState = {
   finalizadoEm: null
 };
 
+let fullReviewScanState = {
+  running: false,
+  concluido: false,
+
+  totalItens: 0,
+  itensProcessados: 0,
+
+  itensPorStatus: {
+    NORMAL: 0,
+    DELETED: 0,
+    UNLIST: 0
+  },
+
+  itensProcessadosPorStatus: {
+    NORMAL: 0,
+    DELETED: 0,
+    UNLIST: 0
+  },
+
+  comentarios: new Map(),
+
+  erros: [],
+
+  iniciadoEm: null,
+  finalizadoEm: null
+};
+
 app.use(express.json());
 
 function gerarAssinatura(path, timestamp, accessToken, shopId) {
@@ -1833,6 +1860,354 @@ app.get("/item-status-diagnostic", async (req, res) => {
       message: error.message
     });
   }
+});
+
+async function executarScanCompletoAvaliacoes() {
+  try {
+    fullReviewScanState = {
+      running: true,
+      concluido: false,
+
+      totalItens: 0,
+      itensProcessados: 0,
+
+      itensPorStatus: {
+        NORMAL: 0,
+        DELETED: 0,
+        UNLIST: 0
+      },
+
+      itensProcessadosPorStatus: {
+        NORMAL: 0,
+        DELETED: 0,
+        UNLIST: 0
+      },
+
+      comentarios: new Map(),
+
+      erros: [],
+
+      iniciadoEm: new Date().toISOString(),
+      finalizadoEm: null
+    };
+
+    console.log(
+      "Iniciando scanner completo de avaliações..."
+    );
+
+    // =====================================
+    // 1. BUSCAR ITENS DE TODOS OS STATUS
+    // =====================================
+
+    const itemListPath =
+      "/api/v2/product/get_item_list";
+
+    const statusLista = [
+      "NORMAL",
+      "DELETED",
+      "UNLIST"
+    ];
+
+    const todosItens = [];
+
+    for (const status of statusLista) {
+      let offset = 0;
+      const pageSize = 100;
+      let hasNextPage = true;
+
+      while (hasNextPage) {
+        const timestamp =
+          Math.floor(Date.now() / 1000);
+
+        const sign = gerarAssinatura(
+          itemListPath,
+          timestamp,
+          authState.accessToken,
+          authState.shopId
+        );
+
+        const url =
+          `https://partner.shopeemobile.com${itemListPath}` +
+          `?partner_id=${PARTNER_ID}` +
+          `&timestamp=${timestamp}` +
+          `&access_token=${authState.accessToken}` +
+          `&shop_id=${authState.shopId}` +
+          `&sign=${sign}` +
+          `&offset=${offset}` +
+          `&page_size=${pageSize}` +
+          `&item_status=${status}`;
+
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (data.error) {
+          throw new Error(
+            `Erro get_item_list ${status}: ${JSON.stringify(data)}`
+          );
+        }
+
+        const lista =
+          data.response?.item || [];
+
+        for (const item of lista) {
+          todosItens.push({
+            item_id: Number(item.item_id),
+            status
+          });
+        }
+
+        fullReviewScanState
+          .itensPorStatus[status] +=
+          lista.length;
+
+        hasNextPage =
+          data.response?.has_next_page === true;
+
+        offset =
+          data.response?.next_offset ??
+          offset + lista.length;
+
+        if (lista.length === 0) {
+          break;
+        }
+      }
+    }
+
+    // =====================================
+    // 2. REMOVER ITEM_ID DUPLICADO
+    // =====================================
+
+    const mapaItens = new Map();
+
+    for (const item of todosItens) {
+      mapaItens.set(
+        String(item.item_id),
+        item
+      );
+    }
+
+    const itensUnicos =
+      Array.from(mapaItens.values());
+
+    fullReviewScanState.totalItens =
+      itensUnicos.length;
+
+    console.log(
+      `Itens únicos para processar: ${itensUnicos.length}`
+    );
+
+    console.log(
+      "Itens por status:",
+      fullReviewScanState.itensPorStatus
+    );
+
+    // =====================================
+    // 3. BUSCAR AVALIAÇÕES ITEM POR ITEM
+    // =====================================
+
+    const commentPath =
+      "/api/v2/product/get_comment";
+
+    for (const item of itensUnicos) {
+      const itemId =
+        Number(item.item_id);
+
+      const status =
+        item.status;
+
+      let cursor = "";
+      let more = true;
+      let totalItem = 0;
+
+      try {
+        while (more) {
+          const timestamp =
+            Math.floor(Date.now() / 1000);
+
+          const sign = gerarAssinatura(
+            commentPath,
+            timestamp,
+            authState.accessToken,
+            authState.shopId
+          );
+
+          let url =
+            `https://partner.shopeemobile.com${commentPath}` +
+            `?partner_id=${PARTNER_ID}` +
+            `&timestamp=${timestamp}` +
+            `&access_token=${authState.accessToken}` +
+            `&shop_id=${authState.shopId}` +
+            `&sign=${sign}` +
+            `&page_size=100` +
+            `&item_id=${itemId}`;
+
+          if (cursor) {
+            url +=
+              `&cursor=${encodeURIComponent(cursor)}`;
+          }
+
+          const response =
+            await fetch(url);
+
+          const data =
+            await response.json();
+
+          if (data.error) {
+            throw new Error(
+              JSON.stringify(data)
+            );
+          }
+
+          const lista =
+            data.response
+              ?.item_comment_list || [];
+
+          for (const avaliacao of lista) {
+            fullReviewScanState
+              .comentarios
+              .set(
+                String(
+                  avaliacao.comment_id
+                ),
+                {
+                  ...avaliacao,
+                  item_status: status
+                }
+              );
+          }
+
+          totalItem +=
+            lista.length;
+
+          more =
+            data.response?.more === true;
+
+          cursor =
+            data.response?.next_cursor || "";
+
+          if (more && !cursor) {
+            break;
+          }
+
+          // teto conhecido do endpoint
+          if (totalItem >= 1000) {
+            break;
+          }
+        }
+
+      } catch (error) {
+        fullReviewScanState.erros.push({
+          item_id: itemId,
+          status,
+          erro: error.message
+        });
+      }
+
+      fullReviewScanState
+        .itensProcessados++;
+
+      if (
+        fullReviewScanState
+          .itensProcessadosPorStatus[status]
+        !== undefined
+      ) {
+        fullReviewScanState
+          .itensProcessadosPorStatus[status]++;
+      }
+
+      if (
+        fullReviewScanState
+          .itensProcessados %
+          50 ===
+        0
+      ) {
+        console.log(
+          `Scanner: ${fullReviewScanState.itensProcessados}/${fullReviewScanState.totalItens}`
+        );
+      }
+
+      // pequena pausa entre anúncios
+      await new Promise(resolve =>
+        setTimeout(resolve, 150)
+      );
+    }
+
+    fullReviewScanState.running =
+      false;
+
+    fullReviewScanState.concluido =
+      true;
+
+    fullReviewScanState.finalizadoEm =
+      new Date().toISOString();
+
+    console.log(
+      "Scanner completo finalizado."
+    );
+
+  } catch (error) {
+    console.error(
+      "Erro geral no scanner completo:"
+    );
+
+    console.error(error);
+
+    fullReviewScanState.running =
+      false;
+
+    fullReviewScanState.concluido =
+      false;
+
+    fullReviewScanState.erros.push({
+      geral: true,
+      erro: error.message
+    });
+  }
+}
+
+app.get("/scan-all-reviews", (req, res) => {
+  if (
+    !authState.accessToken ||
+    !authState.shopId
+  ) {
+    return res.status(401).json({
+      ok: false,
+      message:
+        "Loja ainda não autorizada nesta execução."
+    });
+  }
+
+  if (
+    authState.expiresAt <= Date.now()
+  ) {
+    return res.status(401).json({
+      ok: false,
+      message:
+        "Access token expirado."
+    });
+  }
+
+  if (fullReviewScanState.running) {
+    return res.json({
+      ok: true,
+      message:
+        "Scanner já está em execução.",
+      itens_processados:
+        fullReviewScanState.itensProcessados,
+      total_itens:
+        fullReviewScanState.totalItens
+    });
+  }
+
+  executarScanCompletoAvaliacoes();
+
+  return res.json({
+    ok: true,
+    message:
+      "Scanner completo iniciado.",
+    status_url:
+      "/scan-all-status"
+  });
 });
 
 app.listen(PORT, () => {
