@@ -185,6 +185,118 @@ app.get("/reviews", async (req, res) => {
   }
 });
 
+app.get("/pending-reviews", async (req, res) => {
+  try {
+    if (!authState.accessToken || !authState.shopId) {
+      return res.status(401).json({
+        ok: false,
+        message: "Loja ainda não autorizada nesta execução."
+      });
+    }
+
+    if (authState.expiresAt <= Date.now()) {
+      return res.status(401).json({
+        ok: false,
+        message: "Access token expirado."
+      });
+    }
+
+    const path = "/api/v2/product/get_comment";
+
+    let cursor = "";
+    let more = true;
+
+    const todasAvaliacoes = [];
+
+    while (more) {
+      const timestamp = Math.floor(Date.now() / 1000);
+
+      const sign = gerarAssinatura(
+        path,
+        timestamp,
+        authState.accessToken,
+        authState.shopId
+      );
+
+      let url =
+        `https://partner.shopeemobile.com${path}` +
+        `?partner_id=${PARTNER_ID}` +
+        `&timestamp=${timestamp}` +
+        `&access_token=${authState.accessToken}` +
+        `&shop_id=${authState.shopId}` +
+        `&sign=${sign}` +
+        `&page_size=100`;
+
+      if (cursor) {
+        url += `&cursor=${encodeURIComponent(cursor)}`;
+      }
+
+      const response = await fetch(url);
+      const data = await response.json();
+
+      if (data.error) {
+        console.error("Erro Shopee:", data);
+
+        return res.status(400).json({
+          ok: false,
+          shopee_error: data
+        });
+      }
+
+      const responseData = data.response || {};
+
+      const lista = responseData.item_comment_list || [];
+
+      todasAvaliacoes.push(...lista);
+
+      more = responseData.more === true;
+      cursor = responseData.next_cursor || "";
+
+      if (more && !cursor) {
+        break;
+      }
+    }
+
+    const pendentes = todasAvaliacoes.filter(
+      avaliacao => !avaliacao.comment_reply
+    );
+
+    const resultado = pendentes.map(avaliacao => ({
+      comment_id: avaliacao.comment_id,
+      buyer_username: avaliacao.buyer_username,
+      rating_star: avaliacao.rating_star,
+      comment: avaliacao.comment,
+      order_sn: avaliacao.order_sn,
+      item_id: avaliacao.item_id,
+      create_time: avaliacao.create_time
+    }));
+
+    console.log(
+      `Avaliações encontradas: ${todasAvaliacoes.length}`
+    );
+
+    console.log(
+      `Avaliações pendentes: ${resultado.length}`
+    );
+
+    return res.json({
+      ok: true,
+      total_avaliacoes: todasAvaliacoes.length,
+      total_pendentes: resultado.length,
+      pendentes: resultado
+    });
+
+  } catch (error) {
+    console.error("Erro ao buscar avaliações pendentes:");
+    console.error(error);
+
+    return res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
