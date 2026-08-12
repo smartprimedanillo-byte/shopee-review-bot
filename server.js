@@ -4854,6 +4854,53 @@ app.post("/reply-batch-run", async (req, res) => {
   }
 });
 
+app.get("/processing-status", async (req, res) => {
+  try {
+    const SHOP_ID = 757373207;
+
+    const {
+      data,
+      error
+    } = await supabase
+      .from("reviews")
+      .select(`
+        id,
+        comment_id,
+        buyer_username,
+        status,
+        tentativas,
+        updated_at
+      `)
+      .eq("shop_id", SHOP_ID)
+      .eq("status", "PROCESSANDO")
+      .order("updated_at", {
+        ascending: true
+      });
+
+    if (error) {
+      return res.status(500).json({
+        ok: false,
+        etapa: "consulta_supabase",
+        erro: error
+      });
+    }
+
+    return res.json({
+      ok: true,
+      total_processando:
+        data?.length || 0,
+      registros:
+        data || []
+    });
+
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
