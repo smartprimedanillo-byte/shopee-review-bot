@@ -2050,6 +2050,57 @@ fullDbSyncState = {
       fullDbSyncState.totalItens =
   itensUnicos.length;
 
+  const syncJob =
+  await obterOuCriarSyncJob(
+    Number(authState.shopId)
+  );
+
+const indiceInicial =
+  Number(
+    syncJob.ultimo_indice_processado ?? -1
+  ) + 1;
+
+fullDbSyncState.itensProcessados =
+  Math.max(
+    0,
+    indiceInicial
+  );
+
+  fullDbSyncState.totalAvaliacoesRecebidas =
+  Number(syncJob.total_avaliacoes || 0);
+
+fullDbSyncState.totalGravadas =
+  Number(syncJob.total_gravadas || 0);
+
+fullDbSyncState.totalPendentes =
+  Number(syncJob.total_pendentes || 0);
+
+fullDbSyncState.totalRespondidas =
+  Number(syncJob.total_respondidas || 0);
+
+const { error: erroInicioJob } =
+  await supabase
+    .from("sync_jobs")
+    .update({
+      status: "EXECUTANDO",
+      total_itens: itensUnicos.length,
+      iniciado_em:
+        syncJob.iniciado_em ||
+        new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", syncJob.id);
+
+if (erroInicioJob) {
+  throw new Error(
+    `Erro ao iniciar checkpoint: ${erroInicioJob.message}`
+  );
+}
+
+console.log(
+  `Retomando sincronização a partir do índice ${indiceInicial}`
+);
+
     console.log(
       `Itens únicos para processar: ${itensUnicos.length}`
     );
@@ -2066,7 +2117,12 @@ fullDbSyncState = {
     const commentPath =
       "/api/v2/product/get_comment";
 
-    for (const item of itensUnicos) {
+    for (
+  let indice = indiceInicial;
+  indice < itensUnicos.length;
+  indice++
+) {
+  const item = itensUnicos[indice];
       const itemId =
         Number(item.item_id);
 
@@ -2185,6 +2241,53 @@ fullDbSyncState.totalRespondidas +=
         fullDbSyncState
   .itensProcessados++;
 
+  const {
+  error: erroCheckpoint
+} = await supabase
+  .from("sync_jobs")
+  .update({
+    status: "EXECUTANDO",
+
+    total_itens:
+      itensUnicos.length,
+
+    itens_processados:
+      indice + 1,
+
+    ultimo_indice_processado:
+      indice,
+
+    total_avaliacoes:
+      fullDbSyncState
+        .totalAvaliacoesRecebidas,
+
+    total_gravadas:
+      fullDbSyncState
+        .totalGravadas,
+
+    total_pendentes:
+      fullDbSyncState
+        .totalPendentes,
+
+    total_respondidas:
+      fullDbSyncState
+        .totalRespondidas,
+
+    total_erros:
+      fullDbSyncState
+        .erros.length,
+
+    updated_at:
+      new Date().toISOString()
+  })
+  .eq("id", syncJob.id);
+
+if (erroCheckpoint) {
+  throw new Error(
+    `Erro ao salvar checkpoint: ${erroCheckpoint.message}`
+  );
+}
+
       if (
         fullReviewScanState
           .itensProcessadosPorStatus[status]
@@ -2225,6 +2328,56 @@ fullDbSyncState.concluido = true;
 fullDbSyncState.finalizadoEm =
   new Date().toISOString();
 
+  const {
+  error: erroConclusaoJob
+} = await supabase
+  .from("sync_jobs")
+  .update({
+    status: "CONCLUIDO",
+
+    total_itens:
+      itensUnicos.length,
+
+    itens_processados:
+      itensUnicos.length,
+
+    ultimo_indice_processado:
+      itensUnicos.length - 1,
+
+    total_avaliacoes:
+      fullDbSyncState
+        .totalAvaliacoesRecebidas,
+
+    total_gravadas:
+      fullDbSyncState
+        .totalGravadas,
+
+    total_pendentes:
+      fullDbSyncState
+        .totalPendentes,
+
+    total_respondidas:
+      fullDbSyncState
+        .totalRespondidas,
+
+    total_erros:
+      fullDbSyncState
+        .erros.length,
+
+    finalizado_em:
+      new Date().toISOString(),
+
+    updated_at:
+      new Date().toISOString()
+  })
+  .eq("id", syncJob.id);
+
+if (erroConclusaoJob) {
+  throw new Error(
+    `Erro ao concluir checkpoint: ${erroConclusaoJob.message}`
+  );
+}
+
     console.log(
       "Scanner completo finalizado."
     );
@@ -2253,6 +2406,27 @@ fullDbSyncState.erros.push({
       geral: true,
       erro: error.message
     });
+
+    try {
+  if (typeof syncJob !== "undefined" && syncJob?.id) {
+    await supabase
+      .from("sync_jobs")
+      .update({
+        status: "ERRO",
+        ultimo_erro: error.message,
+        total_erros:
+          fullDbSyncState.erros.length,
+        updated_at:
+          new Date().toISOString()
+      })
+      .eq("id", syncJob.id);
+  }
+} catch (erroCheckpointFinal) {
+  console.error(
+    "Erro ao registrar falha no checkpoint:",
+    erroCheckpointFinal
+  );
+}
   }
 }
 
@@ -4148,6 +4322,52 @@ app.get("/db-review-status", async (req, res) => {
     });
   }
 });
+
+async function obterOuCriarSyncJob(shopId) {
+  const jobType = "FULL_REVIEW_SYNC";
+
+  const {
+    data: existente,
+    error: erroConsulta
+  } = await supabase
+    .from("sync_jobs")
+    .select("*")
+    .eq("shop_id", shopId)
+    .eq("job_type", jobType)
+    .maybeSingle();
+
+  if (erroConsulta) {
+    throw new Error(
+      `Erro ao consultar sync_jobs: ${erroConsulta.message}`
+    );
+  }
+
+  if (existente) {
+    return existente;
+  }
+
+  const {
+    data: criado,
+    error: erroCriacao
+  } = await supabase
+    .from("sync_jobs")
+    .insert({
+      shop_id: shopId,
+      job_type: jobType,
+      status: "PENDENTE",
+      ultimo_indice_processado: -1
+    })
+    .select()
+    .single();
+
+  if (erroCriacao) {
+    throw new Error(
+      `Erro ao criar sync_job: ${erroCriacao.message}`
+    );
+  }
+
+  return criado;
+}
 
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
