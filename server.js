@@ -102,6 +102,13 @@ let fullDbSyncState = {
   finalizadoEm: null
 };
 
+let replyEngineState = {
+  running: false,
+  iniciadoEm: null,
+  finalizadoEm: null,
+  ultimoResultado: null
+};
+
 app.use(express.json());
 
 function gerarAssinatura(path, timestamp, accessToken, shopId) {
@@ -4482,6 +4489,23 @@ app.get("/reply-batch-preview", async (req, res) => {
 app.post("/reply-batch-run", async (req, res) => {
   try {
 
+    if (replyEngineState.running) {
+  return res.status(409).json({
+    ok: false,
+    message:
+      "Já existe um lote de respostas em execução.",
+    iniciado_em:
+      replyEngineState.iniciadoEm
+  });
+}
+
+replyEngineState.running = true;
+replyEngineState.iniciadoEm =
+  new Date().toISOString();
+
+replyEngineState.finalizadoEm = null;
+replyEngineState.ultimoResultado = null;
+
 const recuperacao =
   await recuperarProcessamentosTravados();
 
@@ -4823,6 +4847,25 @@ console.log(
         item => item.ignorada === true
       );
 
+      replyEngineState.running = false;
+
+replyEngineState.finalizadoEm =
+  new Date().toISOString();
+
+replyEngineState.ultimoResultado = {
+  total_processado:
+    resultados.length,
+
+  enviadas:
+    enviadas.length,
+
+  erros:
+    erros.length,
+
+  ignoradas:
+    ignoradas.length
+};
+
     return res.json({
       ok: true,
 
@@ -4855,6 +4898,15 @@ console.log(
       "Erro reply-batch-run:",
       error
     );
+
+    replyEngineState.running = false;
+
+replyEngineState.finalizadoEm =
+  new Date().toISOString();
+
+replyEngineState.ultimoResultado = {
+  erro: error.message
+};
 
     return res.status(500).json({
       ok: false,
