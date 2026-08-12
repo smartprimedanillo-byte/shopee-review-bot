@@ -217,6 +217,131 @@ async function carregarAuthStateDoSupabase() {
   return true;
 }
 
+async function renovarTokenShopeeSeNecessario() {
+  const agora = Date.now();
+
+  // margem de segurança de 5 minutos
+  const margem = 5 * 60 * 1000;
+
+  if (
+    authState.accessToken &&
+    authState.expiresAt &&
+    authState.expiresAt - agora > margem
+  ) {
+    return {
+      renovado: false,
+      motivo: "Token ainda válido."
+    };
+  }
+
+  if (!authState.refreshToken || !authState.shopId) {
+    throw new Error(
+      "Não há refresh_token ou shop_id disponível para renovar o token."
+    );
+  }
+
+  const path =
+    "/api/v2/public/refresh_access_token";
+
+  const timestamp =
+    Math.floor(Date.now() / 1000);
+
+  const baseString =
+    PARTNER_ID.toString() +
+    path +
+    timestamp.toString();
+
+  const sign = crypto
+    .createHmac("sha256", PARTNER_KEY)
+    .update(baseString)
+    .digest("hex");
+
+  const url =
+    `https://partner.shopeemobile.com${path}` +
+    `?partner_id=${PARTNER_ID}` +
+    `&timestamp=${timestamp}` +
+    `&sign=${sign}`;
+
+  const response = await fetch(url, {
+    method: "POST",
+
+    headers: {
+      "Content-Type": "application/json"
+    },
+
+    body: JSON.stringify({
+      refresh_token:
+        authState.refreshToken,
+
+      partner_id:
+        Number(PARTNER_ID),
+
+      shop_id:
+        Number(authState.shopId)
+    })
+  });
+
+  const data =
+    await response.json();
+
+  if (data.error) {
+    throw new Error(
+      `Erro ao renovar token Shopee: ${JSON.stringify(data)}`
+    );
+  }
+
+  const novoExpiresAt =
+    Date.now() +
+    Number(data.expire_in) * 1000;
+
+  authState.accessToken =
+    data.access_token;
+
+  authState.refreshToken =
+    data.refresh_token;
+
+  authState.expiresAt =
+    novoExpiresAt;
+
+  const {
+    error: erroBanco
+  } = await supabase
+    .from("shopee_shops")
+    .update({
+      access_token:
+        data.access_token,
+
+      refresh_token:
+        data.refresh_token,
+
+      token_expires_at:
+        new Date(
+          novoExpiresAt
+        ).toISOString(),
+
+      updated_at:
+        new Date().toISOString()
+    })
+    .eq(
+      "shop_id",
+      Number(authState.shopId)
+    );
+
+  if (erroBanco) {
+    throw new Error(
+      `Token renovado na Shopee, mas houve erro ao salvar no Supabase: ${erroBanco.message}`
+    );
+  }
+
+  return {
+    renovado: true,
+    shop_id:
+      Number(authState.shopId),
+    expire_in:
+      data.expire_in
+  };
+}
+
 app.get("/", (req, res) => {
   res.send("Shopee Review Bot online.");
 });
@@ -5321,6 +5446,26 @@ app.get("/reply-retry-preview", async (req, res) => {
 
       registros:
         data || []
+    });
+
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
+
+app.get("/auth/refresh-test", async (req, res) => {
+  try {
+    const resultado =
+      await renovarTokenShopeeSeNecessario();
+
+    return res.json({
+      ok: true,
+      resultado,
+      token_valid:
+        authState.expiresAt > Date.now()
     });
 
   } catch (error) {
