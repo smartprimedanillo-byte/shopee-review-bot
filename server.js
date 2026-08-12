@@ -5047,6 +5047,24 @@ app.get("/recover-processing-test", async (req, res) => {
   }
 });
 
+app.get("/reply-engine-status", (req, res) => {
+  return res.json({
+    ok: true,
+
+    running:
+      replyEngineState.running,
+
+    iniciado_em:
+      replyEngineState.iniciadoEm,
+
+    finalizado_em:
+      replyEngineState.finalizadoEm,
+
+    ultimo_resultado:
+      replyEngineState.ultimoResultado
+  });
+});
+
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
