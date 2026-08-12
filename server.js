@@ -4481,6 +4481,15 @@ app.get("/reply-batch-preview", async (req, res) => {
 
 app.post("/reply-batch-run", async (req, res) => {
   try {
+
+const recuperacao =
+  await recuperarProcessamentosTravados();
+
+console.log(
+  "Recuperação de PROCESSANDO:",
+  recuperacao
+);
+
     // =====================================
     // CONFIGURAÇÃO DO LOTE
     // =====================================
@@ -4853,6 +4862,73 @@ app.post("/reply-batch-run", async (req, res) => {
     });
   }
 });
+
+async function recuperarProcessamentosTravados() {
+  const SHOP_ID = 757373207;
+
+  const limite =
+    new Date(
+      Date.now() - 10 * 60 * 1000
+    ).toISOString();
+
+  const {
+    data: travados,
+    error: erroConsulta
+  } = await supabase
+    .from("reviews")
+    .select(`
+      id,
+      comment_id,
+      tentativas,
+      updated_at
+    `)
+    .eq("shop_id", SHOP_ID)
+    .eq("status", "PROCESSANDO")
+    .lt("updated_at", limite);
+
+  if (erroConsulta) {
+    throw new Error(
+      `Erro ao consultar PROCESSANDO travados: ${erroConsulta.message}`
+    );
+  }
+
+  if (!travados || travados.length === 0) {
+    return {
+      encontrados: 0,
+      recuperados: 0
+    };
+  }
+
+  const ids =
+    travados.map(item => item.id);
+
+  const {
+    error: erroAtualizacao
+  } = await supabase
+    .from("reviews")
+    .update({
+      status: "PENDENTE",
+      ultimo_erro:
+        "Processamento interrompido antes da conclusão. Registro devolvido automaticamente para PENDENTE.",
+      updated_at:
+        new Date().toISOString()
+    })
+    .in("id", ids);
+
+  if (erroAtualizacao) {
+    throw new Error(
+      `Erro ao recuperar PROCESSANDO travados: ${erroAtualizacao.message}`
+    );
+  }
+
+  return {
+    encontrados:
+      travados.length,
+
+    recuperados:
+      travados.length
+  };
+}
 
 app.get("/processing-status", async (req, res) => {
   try {
