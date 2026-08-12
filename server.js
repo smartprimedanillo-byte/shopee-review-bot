@@ -3030,6 +3030,189 @@ app.get("/test-reply-candidate", async (req, res) => {
   }
 });
 
+app.get("/test-reply-one", async (req, res) => {
+  try {
+    if (!authState.accessToken || !authState.shopId) {
+      return res.status(401).json({
+        ok: false,
+        message: "Loja ainda não autorizada nesta execução."
+      });
+    }
+
+    if (authState.expiresAt <= Date.now()) {
+      return res.status(401).json({
+        ok: false,
+        message: "Access token expirado."
+      });
+    }
+
+    // =====================================
+    // TRAVA DO TESTE
+    // =====================================
+
+    const COMMENT_ID_TESTE = 70371399878449;
+
+    const RESPOSTA_TESTE =
+      "Agradecemos muito pela sua avaliação! Ficamos felizes com sua compra e seguimos à disposição sempre que precisar.";
+
+    // =====================================
+    // 1. CONFIRMAR QUE A AVALIAÇÃO
+    // AINDA ESTÁ SEM RESPOSTA
+    // =====================================
+
+    const getPath = "/api/v2/product/get_comment";
+    const getTimestamp = Math.floor(Date.now() / 1000);
+
+    const getSign = gerarAssinatura(
+      getPath,
+      getTimestamp,
+      authState.accessToken,
+      authState.shopId
+    );
+
+    const getUrl =
+      `https://partner.shopeemobile.com${getPath}` +
+      `?partner_id=${PARTNER_ID}` +
+      `&timestamp=${getTimestamp}` +
+      `&access_token=${authState.accessToken}` +
+      `&shop_id=${authState.shopId}` +
+      `&sign=${getSign}` +
+      `&page_size=1` +
+      `&comment_id=${COMMENT_ID_TESTE}`;
+
+    const getResponse = await fetch(getUrl);
+    const getData = await getResponse.json();
+
+    if (getData.error) {
+      return res.status(400).json({
+        ok: false,
+        etapa: "verificacao",
+        shopee_error: getData
+      });
+    }
+
+    const lista =
+      getData.response?.item_comment_list || [];
+
+    const avaliacao = lista.find(
+      item =>
+        String(item.comment_id) ===
+        String(COMMENT_ID_TESTE)
+    );
+
+    if (!avaliacao) {
+      return res.status(404).json({
+        ok: false,
+        message:
+          "A avaliação de teste não foi encontrada."
+      });
+    }
+
+    if (avaliacao.comment_reply) {
+      return res.status(409).json({
+        ok: false,
+        message:
+          "A avaliação já possui resposta. Nenhuma nova resposta foi enviada.",
+        comment_id: COMMENT_ID_TESTE
+      });
+    }
+
+    if (Number(avaliacao.rating_star) !== 5) {
+      return res.status(400).json({
+        ok: false,
+        message:
+          "A avaliação não possui mais 5 estrelas. Teste cancelado."
+      });
+    }
+
+    // =====================================
+    // 2. ENVIAR UMA ÚNICA RESPOSTA
+    // =====================================
+
+    const replyPath =
+      "/api/v2/product/reply_comment";
+
+    const replyTimestamp =
+      Math.floor(Date.now() / 1000);
+
+    const replySign = gerarAssinatura(
+      replyPath,
+      replyTimestamp,
+      authState.accessToken,
+      authState.shopId
+    );
+
+    const replyUrl =
+      `https://partner.shopeemobile.com${replyPath}` +
+      `?partner_id=${PARTNER_ID}` +
+      `&timestamp=${replyTimestamp}` +
+      `&access_token=${authState.accessToken}` +
+      `&shop_id=${authState.shopId}` +
+      `&sign=${replySign}`;
+
+    const replyResponse = await fetch(replyUrl, {
+      method: "POST",
+
+      headers: {
+        "Content-Type": "application/json"
+      },
+
+      body: JSON.stringify({
+        comment_list: [
+          {
+            comment_id: COMMENT_ID_TESTE,
+            comment: RESPOSTA_TESTE
+          }
+        ]
+      })
+    });
+
+    const replyData =
+      await replyResponse.json();
+
+    if (replyData.error) {
+      return res.status(400).json({
+        ok: false,
+        etapa: "envio",
+        shopee_error: replyData
+      });
+    }
+
+    return res.json({
+      ok: true,
+
+      message:
+        "Resposta de teste enviada para a Shopee.",
+
+      comment_id:
+        COMMENT_ID_TESTE,
+
+      buyer_username:
+        avaliacao.buyer_username,
+
+      rating_star:
+        avaliacao.rating_star,
+
+      resposta_enviada:
+        RESPOSTA_TESTE,
+
+      resposta_shopee:
+        replyData
+    });
+
+  } catch (error) {
+    console.error(
+      "Erro test-reply-one:",
+      error
+    );
+
+    return res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
