@@ -4977,6 +4977,24 @@ app.get("/processing-status", async (req, res) => {
   }
 });
 
+app.get("/recover-processing-test", async (req, res) => {
+  try {
+    const resultado =
+      await recuperarProcessamentosTravados();
+
+    return res.json({
+      ok: true,
+      resultado
+    });
+
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
