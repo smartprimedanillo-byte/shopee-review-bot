@@ -83,6 +83,25 @@ let fullReviewScanState = {
   finalizadoEm: null
 };
 
+let fullDbSyncState = {
+  running: false,
+  concluido: false,
+
+  totalItens: 0,
+  itensProcessados: 0,
+
+  totalAvaliacoesRecebidas: 0,
+  totalGravadas: 0,
+
+  totalPendentes: 0,
+  totalRespondidas: 0,
+
+  erros: [],
+
+  iniciadoEm: null,
+  finalizadoEm: null
+};
+
 app.use(express.json());
 
 function gerarAssinatura(path, timestamp, accessToken, shopId) {
@@ -1880,6 +1899,26 @@ app.get("/item-status-diagnostic", async (req, res) => {
 
 async function executarScanCompletoAvaliacoes() {
   try {
+
+fullDbSyncState = {
+  running: true,
+  concluido: false,
+
+  totalItens: 0,
+  itensProcessados: 0,
+
+  totalAvaliacoesRecebidas: 0,
+  totalGravadas: 0,
+
+  totalPendentes: 0,
+  totalRespondidas: 0,
+
+  erros: [],
+
+  iniciadoEm: new Date().toISOString(),
+  finalizadoEm: null
+};
+
     fullReviewScanState = {
       running: true,
       concluido: false,
@@ -2008,6 +2047,9 @@ async function executarScanCompletoAvaliacoes() {
     fullReviewScanState.totalItens =
       itensUnicos.length;
 
+      fullDbSyncState.totalItens =
+  itensUnicos.length;
+
     console.log(
       `Itens únicos para processar: ${itensUnicos.length}`
     );
@@ -2078,6 +2120,24 @@ async function executarScanCompletoAvaliacoes() {
             data.response
               ?.item_comment_list || [];
 
+              const resultadoBanco =
+  await salvarAvaliacoesNoSupabase(
+    lista,
+    status
+  );
+
+fullDbSyncState.totalAvaliacoesRecebidas +=
+  lista.length;
+
+fullDbSyncState.totalGravadas +=
+  resultadoBanco.gravadas;
+
+fullDbSyncState.totalPendentes +=
+  resultadoBanco.pendentes;
+
+fullDbSyncState.totalRespondidas +=
+  resultadoBanco.respondidas;
+
           for (const avaliacao of lista) {
             fullReviewScanState
               .comentarios
@@ -2122,6 +2182,9 @@ async function executarScanCompletoAvaliacoes() {
       fullReviewScanState
         .itensProcessados++;
 
+        fullDbSyncState
+  .itensProcessados++;
+
       if (
         fullReviewScanState
           .itensProcessadosPorStatus[status]
@@ -2157,6 +2220,11 @@ async function executarScanCompletoAvaliacoes() {
     fullReviewScanState.finalizadoEm =
       new Date().toISOString();
 
+      fullDbSyncState.running = false;
+fullDbSyncState.concluido = true;
+fullDbSyncState.finalizadoEm =
+  new Date().toISOString();
+
     console.log(
       "Scanner completo finalizado."
     );
@@ -2173,6 +2241,13 @@ async function executarScanCompletoAvaliacoes() {
 
     fullReviewScanState.concluido =
       false;
+
+      fullDbSyncState.running = false;
+
+fullDbSyncState.erros.push({
+  geral: true,
+  erro: error.message
+});
 
     fullReviewScanState.erros.push({
       geral: true,
@@ -3786,6 +3861,230 @@ app.get("/sync-reviews-test", async (req, res) => {
       message: error.message
     });
   }
+});
+
+async function salvarAvaliacoesNoSupabase(avaliacoes, itemStatus) {
+  if (!avaliacoes || avaliacoes.length === 0) {
+    return {
+      gravadas: 0,
+      pendentes: 0,
+      respondidas: 0
+    };
+  }
+
+  const registros = avaliacoes.map(avaliacao => {
+    const temResposta =
+      Boolean(avaliacao.comment_reply);
+
+    let replyText = null;
+    let replyAt = null;
+
+    if (temResposta) {
+      replyText =
+        avaliacao.comment_reply?.reply || null;
+
+      const replyCreateTime =
+        Number(
+          avaliacao.comment_reply?.create_time
+        );
+
+      if (replyCreateTime) {
+        replyAt =
+          new Date(
+            replyCreateTime * 1000
+          ).toISOString();
+      }
+    }
+
+    return {
+      comment_id:
+        Number(avaliacao.comment_id),
+
+      shop_id:
+        Number(authState.shopId),
+
+      item_id:
+        avaliacao.item_id
+          ? Number(avaliacao.item_id)
+          : null,
+
+      item_status:
+        itemStatus || null,
+
+      buyer_username:
+        avaliacao.buyer_username || null,
+
+      rating_star:
+        avaliacao.rating_star
+          ? Number(avaliacao.rating_star)
+          : null,
+
+      comment:
+        avaliacao.comment || "",
+
+      shopee_create_time:
+        avaliacao.create_time
+          ? Number(avaliacao.create_time)
+          : null,
+
+      status:
+        temResposta
+          ? "RESPONDIDA"
+          : "PENDENTE",
+
+      reply_text:
+        replyText,
+
+      reply_at:
+        replyAt,
+
+      ultimo_erro:
+        null,
+
+      updated_at:
+        new Date().toISOString()
+    };
+  });
+
+  const {
+    data,
+    error
+  } = await supabase
+    .from("reviews")
+    .upsert(
+      registros,
+      {
+        onConflict: "comment_id"
+      }
+    )
+    .select("comment_id,status");
+
+  if (error) {
+    throw new Error(
+      `Erro ao gravar avaliações no Supabase: ${error.message}`
+    );
+  }
+
+  const pendentes =
+    registros.filter(
+      item => item.status === "PENDENTE"
+    ).length;
+
+  const respondidas =
+    registros.filter(
+      item => item.status === "RESPONDIDA"
+    ).length;
+
+  return {
+    gravadas:
+      data?.length || 0,
+
+    pendentes,
+
+    respondidas
+  };
+}
+
+app.get("/full-db-sync-status", (req, res) => {
+  let progresso = 0;
+
+  if (fullDbSyncState.totalItens > 0) {
+    progresso = (
+      fullDbSyncState.itensProcessados /
+      fullDbSyncState.totalItens *
+      100
+    ).toFixed(1);
+  }
+
+  return res.json({
+    ok: true,
+
+    running:
+      fullDbSyncState.running,
+
+    concluido:
+      fullDbSyncState.concluido,
+
+    progresso_percentual:
+      Number(progresso),
+
+    total_itens:
+      fullDbSyncState.totalItens,
+
+    itens_processados:
+      fullDbSyncState.itensProcessados,
+
+    total_avaliacoes_recebidas:
+      fullDbSyncState.totalAvaliacoesRecebidas,
+
+    total_gravadas:
+      fullDbSyncState.totalGravadas,
+
+    total_pendentes:
+      fullDbSyncState.totalPendentes,
+
+    total_respondidas:
+      fullDbSyncState.totalRespondidas,
+
+    erros:
+      fullDbSyncState.erros.length,
+
+    detalhes_erros:
+      fullDbSyncState.erros.slice(0, 20),
+
+    iniciado_em:
+      fullDbSyncState.iniciadoEm,
+
+    finalizado_em:
+      fullDbSyncState.finalizadoEm
+  });
+});
+
+app.get("/full-db-sync-start", (req, res) => {
+  if (
+    !authState.accessToken ||
+    !authState.shopId
+  ) {
+    return res.status(401).json({
+      ok: false,
+      message:
+        "Loja ainda não autorizada nesta execução."
+    });
+  }
+
+  if (
+    authState.expiresAt <= Date.now()
+  ) {
+    return res.status(401).json({
+      ok: false,
+      message:
+        "Access token expirado."
+    });
+  }
+
+  if (
+    fullDbSyncState.running
+  ) {
+    return res.json({
+      ok: true,
+      message:
+        "Sincronização completa já está em execução.",
+      itens_processados:
+        fullDbSyncState.itensProcessados,
+      total_itens:
+        fullDbSyncState.totalItens
+    });
+  }
+
+  executarScanCompletoAvaliacoes();
+
+  return res.json({
+    ok: true,
+    message:
+      "Sincronização completa Shopee → Supabase iniciada.",
+    status_url:
+      "/full-db-sync-status"
+  });
 });
 
 app.listen(PORT, () => {
