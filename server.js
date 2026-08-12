@@ -4412,6 +4412,73 @@ app.get("/sync-job-status", async (req, res) => {
   }
 });
 
+app.get("/reply-batch-preview", async (req, res) => {
+  try {
+    const LIMITE = 20;
+
+    const {
+      data,
+      error
+    } = await supabase
+      .from("reviews")
+      .select(`
+        id,
+        comment_id,
+        shop_id,
+        item_id,
+        buyer_username,
+        rating_star,
+        comment,
+        status,
+        tentativas,
+        shopee_create_time
+      `)
+      .eq("shop_id", 757373207)
+      .eq("status", "PENDENTE")
+      .eq("rating_star", 5)
+      .eq("comment", "")
+      .order("shopee_create_time", {
+        ascending: false
+      })
+      .limit(LIMITE);
+
+    if (error) {
+      return res.status(500).json({
+        ok: false,
+        etapa: "consulta_supabase",
+        erro: error
+      });
+    }
+
+    return res.json({
+      ok: true,
+
+      ATENCAO:
+        "Esta rota NÃO responde nenhuma avaliação.",
+
+      limite:
+        LIMITE,
+
+      total_candidatas:
+        data?.length || 0,
+
+      candidatas:
+        data || []
+    });
+
+  } catch (error) {
+    console.error(
+      "Erro reply-batch-preview:",
+      error
+    );
+
+    return res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
