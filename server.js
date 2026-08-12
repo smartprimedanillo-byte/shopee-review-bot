@@ -3524,6 +3524,270 @@ app.get("/db-test", async (req, res) => {
   }
 });
 
+app.get("/sync-reviews-test", async (req, res) => {
+  try {
+    // ==============================
+    // 1. VALIDAR AUTORIZAÇÃO SHOPEE
+    // ==============================
+
+    if (!authState.accessToken || !authState.shopId) {
+      return res.status(401).json({
+        ok: false,
+        message: "Loja ainda não autorizada nesta execução."
+      });
+    }
+
+    if (authState.expiresAt <= Date.now()) {
+      return res.status(401).json({
+        ok: false,
+        message: "Access token expirado."
+      });
+    }
+
+    // ==============================
+    // 2. BUSCAR 100 AVALIAÇÕES
+    // ==============================
+
+    const path = "/api/v2/product/get_comment";
+    const timestamp = Math.floor(Date.now() / 1000);
+
+    const sign = gerarAssinatura(
+      path,
+      timestamp,
+      authState.accessToken,
+      authState.shopId
+    );
+
+    const url =
+      `https://partner.shopeemobile.com${path}` +
+      `?partner_id=${PARTNER_ID}` +
+      `&timestamp=${timestamp}` +
+      `&access_token=${authState.accessToken}` +
+      `&shop_id=${authState.shopId}` +
+      `&sign=${sign}` +
+      `&page_size=100`;
+
+    const response = await fetch(url);
+    const shopeeData = await response.json();
+
+    if (shopeeData.error) {
+      return res.status(400).json({
+        ok: false,
+        etapa: "shopee",
+        shopee_error: shopeeData
+      });
+    }
+
+    const avaliacoes =
+      shopeeData.response?.item_comment_list || [];
+
+    if (avaliacoes.length === 0) {
+      return res.json({
+        ok: true,
+        message: "Nenhuma avaliação encontrada.",
+        total_shopee: 0
+      });
+    }
+
+    // ==============================
+    // 3. DESCOBRIR O QUE JÁ EXISTE
+    // ==============================
+
+    const commentIds =
+      avaliacoes.map(avaliacao =>
+        Number(avaliacao.comment_id)
+      );
+
+    const {
+      data: existentes,
+      error: erroExistentes
+    } = await supabase
+      .from("reviews")
+      .select("comment_id")
+      .in("comment_id", commentIds);
+
+    if (erroExistentes) {
+      return res.status(500).json({
+        ok: false,
+        etapa: "consulta_banco",
+        erro: erroExistentes
+      });
+    }
+
+    const idsExistentes = new Set(
+      (existentes || []).map(item =>
+        String(item.comment_id)
+      )
+    );
+
+    const totalNovas =
+      avaliacoes.filter(
+        avaliacao =>
+          !idsExistentes.has(
+            String(avaliacao.comment_id)
+          )
+      ).length;
+
+    const totalJaExistiam =
+      avaliacoes.length - totalNovas;
+
+    // ==============================
+    // 4. PREPARAR DADOS
+    // ==============================
+
+    const registros = avaliacoes.map(avaliacao => {
+      const temResposta =
+        Boolean(avaliacao.comment_reply);
+
+      let replyText = null;
+      let replyAt = null;
+
+      if (temResposta) {
+        replyText =
+          avaliacao.comment_reply?.reply || null;
+
+        const replyCreateTime =
+          Number(
+            avaliacao.comment_reply?.create_time
+          );
+
+        if (replyCreateTime) {
+          replyAt =
+            new Date(
+              replyCreateTime * 1000
+            ).toISOString();
+        }
+      }
+
+      return {
+        comment_id:
+          Number(avaliacao.comment_id),
+
+        shop_id:
+          Number(authState.shopId),
+
+        item_id:
+          avaliacao.item_id
+            ? Number(avaliacao.item_id)
+            : null,
+
+        buyer_username:
+          avaliacao.buyer_username || null,
+
+        rating_star:
+          avaliacao.rating_star
+            ? Number(avaliacao.rating_star)
+            : null,
+
+        comment:
+          avaliacao.comment || "",
+
+        shopee_create_time:
+          avaliacao.create_time
+            ? Number(avaliacao.create_time)
+            : null,
+
+        status:
+          temResposta
+            ? "RESPONDIDA"
+            : "PENDENTE",
+
+        reply_text:
+          replyText,
+
+        reply_at:
+          replyAt,
+
+        ultimo_erro:
+          null,
+
+        updated_at:
+          new Date().toISOString()
+      };
+    });
+
+    // ==============================
+    // 5. UPSERT NO SUPABASE
+    // ==============================
+
+    const {
+      data: gravadas,
+      error: erroGravacao
+    } = await supabase
+      .from("reviews")
+      .upsert(
+        registros,
+        {
+          onConflict: "comment_id"
+        }
+      )
+      .select(
+        "comment_id,status,rating_star,buyer_username"
+      );
+
+    if (erroGravacao) {
+      return res.status(500).json({
+        ok: false,
+        etapa: "gravacao_banco",
+        erro: erroGravacao
+      });
+    }
+
+    // ==============================
+    // 6. RESUMO
+    // ==============================
+
+    const pendentes =
+      registros.filter(
+        item => item.status === "PENDENTE"
+      ).length;
+
+    const respondidas =
+      registros.filter(
+        item => item.status === "RESPONDIDA"
+      ).length;
+
+    return res.json({
+      ok: true,
+
+      message:
+        "Sincronização de teste concluída.",
+
+      total_recebido_shopee:
+        avaliacoes.length,
+
+      novas_no_banco:
+        totalNovas,
+
+      ja_existiam_no_banco:
+        totalJaExistiam,
+
+      total_upsert:
+        gravadas?.length || 0,
+
+      pendentes:
+        pendentes,
+
+      respondidas:
+        respondidas,
+
+      amostra:
+        (gravadas || []).slice(0, 10)
+    });
+
+  } catch (error) {
+    console.error(
+      "Erro sync-reviews-test:",
+      error
+    );
+
+    return res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
