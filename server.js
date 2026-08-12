@@ -4369,6 +4369,49 @@ async function obterOuCriarSyncJob(shopId) {
   return criado;
 }
 
+app.get("/sync-job-status", async (req, res) => {
+  try {
+    const shopId = Number(authState.shopId || 757373207);
+
+    const {
+      data,
+      error
+    } = await supabase
+      .from("sync_jobs")
+      .select("*")
+      .eq("shop_id", shopId)
+      .eq("job_type", "FULL_REVIEW_SYNC")
+      .maybeSingle();
+
+    if (error) {
+      return res.status(500).json({
+        ok: false,
+        erro: error
+      });
+    }
+
+    if (!data) {
+      return res.json({
+        ok: true,
+        encontrado: false,
+        message: "Nenhum checkpoint encontrado."
+      });
+    }
+
+    return res.json({
+      ok: true,
+      encontrado: true,
+      checkpoint: data
+    });
+
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
