@@ -161,6 +161,62 @@ async function contarRespostasHoje(shopId) {
   return count || 0;
 }
 
+async function carregarAuthStateDoSupabase() {
+  const {
+    data,
+    error
+  } = await supabase
+    .from("shopee_shops")
+    .select(`
+      shop_id,
+      access_token,
+      refresh_token,
+      token_expires_at,
+      ativa
+    `)
+    .eq("shop_name", "Key Quality")
+    .eq("ativa", true)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(
+      `Erro ao carregar autenticação da Shopee: ${error.message}`
+    );
+  }
+
+  if (!data) {
+    console.log(
+      "Nenhuma autenticação Shopee persistida encontrada."
+    );
+
+    return false;
+  }
+
+  authState = {
+    shopId:
+      Number(data.shop_id),
+
+    accessToken:
+      data.access_token,
+
+    refreshToken:
+      data.refresh_token,
+
+    expiresAt:
+      data.token_expires_at
+        ? new Date(
+            data.token_expires_at
+          ).getTime()
+        : 0
+  };
+
+  console.log(
+    `Autenticação Shopee carregada do Supabase para shop_id ${authState.shopId}`
+  );
+
+  return true;
+}
+
 app.get("/", (req, res) => {
   res.send("Shopee Review Bot online.");
 });
@@ -5275,6 +5331,17 @@ app.get("/reply-retry-preview", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
+app.listen(PORT, async () => {
+  console.log(
+    `Servidor rodando na porta ${PORT}`
+  );
+
+  try {
+    await carregarAuthStateDoSupabase();
+  } catch (error) {
+    console.error(
+      "Erro ao restaurar autenticação Shopee:",
+      error
+    );
+  }
 });
