@@ -5164,6 +5164,74 @@ app.get("/reply-daily-status", async (req, res) => {
   }
 });
 
+app.get("/reply-retry-preview", async (req, res) => {
+  try {
+    const SHOP_ID = 757373207;
+    const LIMITE = 20;
+    const MAX_TENTATIVAS = 3;
+
+    const {
+      data,
+      error
+    } = await supabase
+      .from("reviews")
+      .select(`
+        id,
+        comment_id,
+        item_id,
+        item_status,
+        buyer_username,
+        rating_star,
+        comment,
+        status,
+        tentativas,
+        ultimo_erro,
+        updated_at
+      `)
+      .eq("shop_id", SHOP_ID)
+      .eq("status", "ERRO")
+      .lt("tentativas", MAX_TENTATIVAS)
+      .neq("item_status", "TEST")
+      .order("updated_at", {
+        ascending: true
+      })
+      .limit(LIMITE);
+
+    if (error) {
+      return res.status(500).json({
+        ok: false,
+        etapa: "consulta_supabase",
+        erro: error
+      });
+    }
+
+    return res.json({
+      ok: true,
+
+      ATENCAO:
+        "Esta rota NÃO reprocessa nenhuma avaliação.",
+
+      max_tentativas:
+        MAX_TENTATIVAS,
+
+      limite:
+        LIMITE,
+
+      elegiveis_retry:
+        data?.length || 0,
+
+      registros:
+        data || []
+    });
+
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
