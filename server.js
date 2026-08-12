@@ -4087,6 +4087,68 @@ app.get("/full-db-sync-start", (req, res) => {
   });
 });
 
+app.get("/db-review-status", async (req, res) => {
+  try {
+    const { count: total, error: erroTotal } =
+      await supabase
+        .from("reviews")
+        .select("*", {
+          count: "exact",
+          head: true
+        });
+
+    if (erroTotal) {
+      return res.status(500).json({
+        ok: false,
+        etapa: "total",
+        erro: erroTotal
+      });
+    }
+
+    const statusList = [
+      "PENDENTE",
+      "RESPONDIDA",
+      "PROCESSANDO",
+      "ERRO"
+    ];
+
+    const porStatus = {};
+
+    for (const status of statusList) {
+      const { count, error } =
+        await supabase
+          .from("reviews")
+          .select("*", {
+            count: "exact",
+            head: true
+          })
+          .eq("status", status);
+
+      if (error) {
+        return res.status(500).json({
+          ok: false,
+          etapa: `status_${status}`,
+          erro: error
+        });
+      }
+
+      porStatus[status] = count || 0;
+    }
+
+    return res.json({
+      ok: true,
+      total_reviews_no_banco: total || 0,
+      por_status: porStatus
+    });
+
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
