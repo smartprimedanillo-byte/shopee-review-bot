@@ -4444,6 +4444,7 @@ app.get("/reply-batch-preview", async (req, res) => {
       .eq("status", "PENDENTE")
       .eq("rating_star", 5)
       .eq("comment", "")
+      .neq("item_status", "TEST")
       .order("shopee_create_time", {
         ascending: false
       })
@@ -4574,6 +4575,7 @@ console.log(
       .eq("status", "PENDENTE")
       .eq("rating_star", 5)
       .eq("comment", "")
+      .neq("item_status", "TEST")
       .order("shopee_create_time", {
         ascending: false
       })
