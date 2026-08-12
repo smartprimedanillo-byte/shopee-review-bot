@@ -225,6 +225,49 @@ app.get("/callback", async (req, res) => {
       expiresAt: Date.now() + data.expire_in * 1000
     };
 
+    const tokenExpiresAt =
+  new Date(
+    Date.now() + Number(data.expire_in) * 1000
+  ).toISOString();
+
+const {
+  error: erroSalvarShop
+} = await supabase
+  .from("shopee_shops")
+  .upsert(
+    {
+      shop_id:
+        Number(authState.shopId),
+
+      shop_name:
+        "Key Quality",
+
+      access_token:
+        authState.accessToken,
+
+      refresh_token:
+        authState.refreshToken,
+
+      token_expires_at:
+        tokenExpiresAt,
+
+      ativa:
+        true,
+
+      updated_at:
+        new Date().toISOString()
+    },
+    {
+      onConflict: "shop_id"
+    }
+  );
+
+if (erroSalvarShop) {
+  throw new Error(
+    `Erro ao salvar token da loja no Supabase: ${erroSalvarShop.message}`
+  );
+}
+
     console.log("Token Shopee armazenado em memória.");
     console.log("Shop ID:", authState.shopId);
 
