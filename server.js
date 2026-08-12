@@ -3213,6 +3213,235 @@ app.get("/test-reply-one", async (req, res) => {
   }
 });
 
+app.get("/test-reply-batch-10", async (req, res) => {
+  try {
+    if (!authState.accessToken || !authState.shopId) {
+      return res.status(401).json({
+        ok: false,
+        message: "Loja ainda não autorizada nesta execução."
+      });
+    }
+
+    if (authState.expiresAt <= Date.now()) {
+      return res.status(401).json({
+        ok: false,
+        message: "Access token expirado."
+      });
+    }
+
+    const getPath = "/api/v2/product/get_comment";
+
+    const timestamp = Math.floor(Date.now() / 1000);
+
+    const sign = gerarAssinatura(
+      getPath,
+      timestamp,
+      authState.accessToken,
+      authState.shopId
+    );
+
+    const url =
+      `https://partner.shopeemobile.com${getPath}` +
+      `?partner_id=${PARTNER_ID}` +
+      `&timestamp=${timestamp}` +
+      `&access_token=${authState.accessToken}` +
+      `&shop_id=${authState.shopId}` +
+      `&sign=${sign}` +
+      `&page_size=100`;
+
+    const response = await fetch(url);
+    const data = await response.json();
+
+    if (data.error) {
+      return res.status(400).json({
+        ok: false,
+        etapa: "busca",
+        shopee_error: data
+      });
+    }
+
+    const lista =
+      data.response?.item_comment_list || [];
+
+    // =====================================
+    // FILTRAR SOMENTE CANDIDATAS SEGURAS
+    // =====================================
+
+    const candidatas = lista
+      .filter(avaliacao => {
+        const semResposta =
+          !avaliacao.comment_reply;
+
+        const cincoEstrelas =
+          Number(avaliacao.rating_star) === 5;
+
+        const semComentario =
+          !avaliacao.comment ||
+          avaliacao.comment.trim() === "";
+
+        return (
+          semResposta &&
+          cincoEstrelas &&
+          semComentario
+        );
+      })
+      .slice(0, 10);
+
+    if (candidatas.length === 0) {
+      return res.json({
+        ok: true,
+        message:
+          "Nenhuma candidata encontrada para o lote de teste.",
+        total_encontradas: 0
+      });
+    }
+
+    const RESPOSTA_PADRAO =
+      "Agradecemos muito pela sua avaliação! Ficamos felizes com sua compra e seguimos à disposição sempre que precisar.";
+
+    // =====================================
+    // ENVIAR RESPOSTAS
+    // UMA POR UMA
+    // =====================================
+
+    const replyPath =
+      "/api/v2/product/reply_comment";
+
+    const resultados = [];
+
+    for (const avaliacao of candidatas) {
+      try {
+        const replyTimestamp =
+          Math.floor(Date.now() / 1000);
+
+        const replySign = gerarAssinatura(
+          replyPath,
+          replyTimestamp,
+          authState.accessToken,
+          authState.shopId
+        );
+
+        const replyUrl =
+          `https://partner.shopeemobile.com${replyPath}` +
+          `?partner_id=${PARTNER_ID}` +
+          `&timestamp=${replyTimestamp}` +
+          `&access_token=${authState.accessToken}` +
+          `&shop_id=${authState.shopId}` +
+          `&sign=${replySign}`;
+
+        const replyResponse = await fetch(replyUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            comment_list: [
+              {
+                comment_id:
+                  avaliacao.comment_id,
+
+                comment:
+                  RESPOSTA_PADRAO
+              }
+            ]
+          })
+        });
+
+        const replyData =
+          await replyResponse.json();
+
+        if (replyData.error) {
+          resultados.push({
+            comment_id:
+              avaliacao.comment_id,
+
+            buyer_username:
+              avaliacao.buyer_username,
+
+            sucesso: false,
+
+            erro:
+              replyData
+          });
+        } else {
+          resultados.push({
+            comment_id:
+              avaliacao.comment_id,
+
+            buyer_username:
+              avaliacao.buyer_username,
+
+            sucesso: true
+          });
+        }
+
+      } catch (error) {
+        resultados.push({
+          comment_id:
+            avaliacao.comment_id,
+
+          buyer_username:
+            avaliacao.buyer_username,
+
+          sucesso: false,
+
+          erro:
+            error.message
+        });
+      }
+
+      // pequena pausa entre respostas
+      await new Promise(resolve =>
+        setTimeout(resolve, 300)
+      );
+    }
+
+    const enviadas =
+      resultados.filter(
+        resultado =>
+          resultado.sucesso
+      );
+
+    const erros =
+      resultados.filter(
+        resultado =>
+          !resultado.sucesso
+      );
+
+    return res.json({
+      ok: true,
+
+      message:
+        "Lote de teste finalizado.",
+
+      total_processado:
+        resultados.length,
+
+      enviadas:
+        enviadas.length,
+
+      erros:
+        erros.length,
+
+      resposta_utilizada:
+        RESPOSTA_PADRAO,
+
+      resultados
+    });
+
+  } catch (error) {
+    console.error(
+      "Erro test-reply-batch-10:",
+      error
+    );
+
+    return res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
