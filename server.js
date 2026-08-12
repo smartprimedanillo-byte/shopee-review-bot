@@ -125,6 +125,42 @@ function gerarAssinatura(path, timestamp, accessToken, shopId) {
     .digest("hex");
 }
 
+async function contarRespostasHoje(shopId) {
+  const agora = new Date();
+
+  const inicioHoje = new Date(
+    Date.UTC(
+      agora.getUTCFullYear(),
+      agora.getUTCMonth(),
+      agora.getUTCDate(),
+      0,
+      0,
+      0
+    )
+  ).toISOString();
+
+  const {
+    count,
+    error
+  } = await supabase
+    .from("reviews")
+    .select("*", {
+      count: "exact",
+      head: true
+    })
+    .eq("shop_id", shopId)
+    .eq("status", "RESPONDIDA")
+    .gte("reply_at", inicioHoje);
+
+  if (error) {
+    throw new Error(
+      `Erro ao contar respostas do dia: ${error.message}`
+    );
+  }
+
+  return count || 0;
+}
+
 app.get("/", (req, res) => {
   res.send("Shopee Review Bot online.");
 });
@@ -4521,6 +4557,7 @@ console.log(
 
     const SHOP_ID = 757373207;
     const LIMITE = 20;
+    const LIMITE_DIARIO = 500;
 
     const RESPOSTA_PADRAO =
       "Agradecemos muito pela sua avaliação! Ficamos felizes com sua compra e seguimos à disposição sempre que precisar.";
@@ -4553,6 +4590,31 @@ console.log(
       });
     }
 
+    const respondidasHoje =
+  await contarRespostasHoje(SHOP_ID);
+
+const restanteHoje =
+  LIMITE_DIARIO - respondidasHoje;
+
+if (restanteHoje <= 0) {
+  replyEngineState.running = false;
+
+  return res.status(429).json({
+    ok: false,
+    message:
+      "Limite diário de respostas atingido.",
+
+    limite_diario:
+      LIMITE_DIARIO,
+
+    respondidas_hoje:
+      respondidasHoje,
+
+    restante_hoje:
+      0
+  });
+}
+
     // =====================================
     // 2. BUSCAR CANDIDATAS NO SUPABASE
     // =====================================
@@ -4579,7 +4641,12 @@ console.log(
       .order("shopee_create_time", {
         ascending: false
       })
-      .limit(LIMITE);
+     .limit(
+  Math.min(
+    LIMITE,
+    restanteHoje
+  )
+);
 
     if (erroConsulta) {
       return res.status(500).json({
@@ -5065,6 +5132,36 @@ app.get("/reply-engine-status", (req, res) => {
     ultimo_resultado:
       replyEngineState.ultimoResultado
   });
+});
+
+app.get("/reply-daily-status", async (req, res) => {
+  try {
+    const SHOP_ID = 757373207;
+    const LIMITE_DIARIO = 500;
+
+    const respondidasHoje =
+      await contarRespostasHoje(SHOP_ID);
+
+    const restanteHoje =
+      Math.max(
+        0,
+        LIMITE_DIARIO - respondidasHoje
+      );
+
+    return res.json({
+      ok: true,
+      shop_id: SHOP_ID,
+      limite_diario: LIMITE_DIARIO,
+      respondidas_hoje: respondidasHoje,
+      restante_hoje: restanteHoje
+    });
+
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
 });
 
 app.listen(PORT, () => {
