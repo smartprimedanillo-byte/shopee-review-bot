@@ -4479,6 +4479,381 @@ app.get("/reply-batch-preview", async (req, res) => {
   }
 });
 
+app.post("/reply-batch-run", async (req, res) => {
+  try {
+    // =====================================
+    // CONFIGURAÇÃO DO LOTE
+    // =====================================
+
+    const SHOP_ID = 757373207;
+    const LIMITE = 20;
+
+    const RESPOSTA_PADRAO =
+      "Agradecemos muito pela sua avaliação! Ficamos felizes com sua compra e seguimos à disposição sempre que precisar.";
+
+    // =====================================
+    // 1. VALIDAR SHOPEE
+    // =====================================
+
+    if (!authState.accessToken || !authState.shopId) {
+      return res.status(401).json({
+        ok: false,
+        message:
+          "Loja ainda não autorizada nesta execução."
+      });
+    }
+
+    if (authState.expiresAt <= Date.now()) {
+      return res.status(401).json({
+        ok: false,
+        message:
+          "Access token expirado."
+      });
+    }
+
+    if (Number(authState.shopId) !== SHOP_ID) {
+      return res.status(400).json({
+        ok: false,
+        message:
+          "A loja autorizada não corresponde à Key Quality."
+      });
+    }
+
+    // =====================================
+    // 2. BUSCAR CANDIDATAS NO SUPABASE
+    // =====================================
+
+    const {
+      data: candidatas,
+      error: erroConsulta
+    } = await supabase
+      .from("reviews")
+      .select(`
+        id,
+        comment_id,
+        buyer_username,
+        rating_star,
+        comment,
+        status,
+        tentativas
+      `)
+      .eq("shop_id", SHOP_ID)
+      .eq("status", "PENDENTE")
+      .eq("rating_star", 5)
+      .eq("comment", "")
+      .order("shopee_create_time", {
+        ascending: false
+      })
+      .limit(LIMITE);
+
+    if (erroConsulta) {
+      return res.status(500).json({
+        ok: false,
+        etapa: "consulta_supabase",
+        erro: erroConsulta
+      });
+    }
+
+    if (!candidatas || candidatas.length === 0) {
+      return res.json({
+        ok: true,
+        message:
+          "Nenhuma avaliação elegível encontrada.",
+        total_processado: 0
+      });
+    }
+
+    const resultados = [];
+
+    const replyPath =
+      "/api/v2/product/reply_comment";
+
+    // =====================================
+    // 3. PROCESSAR UMA POR UMA
+    // =====================================
+
+    for (const avaliacao of candidatas) {
+      try {
+        // ---------------------------------
+        // TRAVA: PENDENTE → PROCESSANDO
+        // ---------------------------------
+
+        const {
+          data: bloqueada,
+          error: erroBloqueio
+        } = await supabase
+          .from("reviews")
+          .update({
+            status: "PROCESSANDO",
+            updated_at:
+              new Date().toISOString()
+          })
+          .eq("id", avaliacao.id)
+          .eq("status", "PENDENTE")
+          .select("id,comment_id")
+          .maybeSingle();
+
+        if (erroBloqueio) {
+          throw new Error(
+            `Erro ao bloquear avaliação: ${erroBloqueio.message}`
+          );
+        }
+
+        // Outra execução já pegou esse registro.
+        if (!bloqueada) {
+          resultados.push({
+            comment_id:
+              avaliacao.comment_id,
+            sucesso: false,
+            ignorada: true,
+            motivo:
+              "Avaliação não estava mais PENDENTE."
+          });
+
+          continue;
+        }
+
+        // ---------------------------------
+        // ENVIAR PARA SHOPEE
+        // ---------------------------------
+
+        const timestamp =
+          Math.floor(Date.now() / 1000);
+
+        const sign = gerarAssinatura(
+          replyPath,
+          timestamp,
+          authState.accessToken,
+          authState.shopId
+        );
+
+        const replyUrl =
+          `https://partner.shopeemobile.com${replyPath}` +
+          `?partner_id=${PARTNER_ID}` +
+          `&timestamp=${timestamp}` +
+          `&access_token=${authState.accessToken}` +
+          `&shop_id=${authState.shopId}` +
+          `&sign=${sign}`;
+
+        const replyResponse =
+          await fetch(replyUrl, {
+            method: "POST",
+
+            headers: {
+              "Content-Type":
+                "application/json"
+            },
+
+            body: JSON.stringify({
+              comment_list: [
+                {
+                  comment_id:
+                    Number(
+                      avaliacao.comment_id
+                    ),
+
+                  comment:
+                    RESPOSTA_PADRAO
+                }
+              ]
+            })
+          });
+
+        const replyData =
+          await replyResponse.json();
+
+        // ---------------------------------
+        // ERRO SHOPEE
+        // ---------------------------------
+
+        if (replyData.error) {
+          const erroTexto =
+            JSON.stringify(replyData);
+
+          await supabase
+            .from("reviews")
+            .update({
+              status: "ERRO",
+
+              tentativas:
+                Number(
+                  avaliacao.tentativas || 0
+                ) + 1,
+
+              ultimo_erro:
+                erroTexto,
+
+              updated_at:
+                new Date().toISOString()
+            })
+            .eq("id", avaliacao.id);
+
+          resultados.push({
+            comment_id:
+              avaliacao.comment_id,
+
+            buyer_username:
+              avaliacao.buyer_username,
+
+            sucesso: false,
+
+            erro:
+              replyData
+          });
+
+          continue;
+        }
+
+        // ---------------------------------
+        // SUCESSO
+        // ---------------------------------
+
+        await supabase
+          .from("reviews")
+          .update({
+            status: "RESPONDIDA",
+
+            reply_text:
+              RESPOSTA_PADRAO,
+
+            reply_at:
+              new Date().toISOString(),
+
+            tentativas:
+              Number(
+                avaliacao.tentativas || 0
+              ) + 1,
+
+            ultimo_erro:
+              null,
+
+            updated_at:
+              new Date().toISOString()
+          })
+          .eq("id", avaliacao.id);
+
+        resultados.push({
+          comment_id:
+            avaliacao.comment_id,
+
+          buyer_username:
+            avaliacao.buyer_username,
+
+          sucesso: true
+        });
+
+      } catch (error) {
+        // ---------------------------------
+        // ERRO INTERNO
+        // ---------------------------------
+
+        try {
+          await supabase
+            .from("reviews")
+            .update({
+              status: "ERRO",
+
+              tentativas:
+                Number(
+                  avaliacao.tentativas || 0
+                ) + 1,
+
+              ultimo_erro:
+                error.message,
+
+              updated_at:
+                new Date().toISOString()
+            })
+            .eq("id", avaliacao.id);
+
+        } catch (erroBanco) {
+          console.error(
+            "Erro adicional ao registrar falha:",
+            erroBanco
+          );
+        }
+
+        resultados.push({
+          comment_id:
+            avaliacao.comment_id,
+
+          buyer_username:
+            avaliacao.buyer_username,
+
+          sucesso: false,
+
+          erro:
+            error.message
+        });
+      }
+
+      // Pequena pausa entre respostas
+      await new Promise(resolve =>
+        setTimeout(resolve, 300)
+      );
+    }
+
+    // =====================================
+    // 4. RESULTADO FINAL
+    // =====================================
+
+    const enviadas =
+      resultados.filter(
+        item => item.sucesso === true
+      );
+
+    const erros =
+      resultados.filter(
+        item =>
+          item.sucesso === false &&
+          !item.ignorada
+      );
+
+    const ignoradas =
+      resultados.filter(
+        item => item.ignorada === true
+      );
+
+    return res.json({
+      ok: true,
+
+      message:
+        "Lote operacional finalizado.",
+
+      limite:
+        LIMITE,
+
+      total_processado:
+        resultados.length,
+
+      enviadas:
+        enviadas.length,
+
+      erros:
+        erros.length,
+
+      ignoradas:
+        ignoradas.length,
+
+      resposta_utilizada:
+        RESPOSTA_PADRAO,
+
+      resultados
+    });
+
+  } catch (error) {
+    console.error(
+      "Erro reply-batch-run:",
+      error
+    );
+
+    return res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
