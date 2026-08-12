@@ -1,12 +1,28 @@
 const express = require("express");
 const crypto = require("crypto");
 require("dotenv").config();
+const { createClient } = require("@supabase/supabase-js");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 const PARTNER_ID = Number(process.env.SHOPEE_PARTNER_ID);
 const PARTNER_KEY = process.env.SHOPEE_PARTNER_KEY;
+
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY;
+
+const supabase = createClient(
+  SUPABASE_URL,
+  SUPABASE_SECRET_KEY,
+  {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false
+    }
+  }
+);
 
 let authState = {
   shopId: null,
@@ -3434,6 +3450,72 @@ app.get("/test-reply-batch-10", async (req, res) => {
       "Erro test-reply-batch-10:",
       error
     );
+
+    return res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
+
+app.get("/db-test", async (req, res) => {
+  try {
+    const TEST_COMMENT_ID = 999999999999999;
+
+    const { data: gravado, error: erroGravacao } =
+      await supabase
+        .from("reviews")
+        .upsert(
+          {
+            comment_id: TEST_COMMENT_ID,
+            shop_id: 757373207,
+            item_id: 22497288394,
+            item_status: "TEST",
+            buyer_username: "TESTE_SUPABASE",
+            rating_star: 5,
+            comment: "Registro de teste do banco",
+            shopee_create_time: Math.floor(Date.now() / 1000),
+            status: "PENDENTE",
+            updated_at: new Date().toISOString()
+          },
+          {
+            onConflict: "comment_id"
+          }
+        )
+        .select();
+
+    if (erroGravacao) {
+      return res.status(500).json({
+        ok: false,
+        etapa: "gravacao",
+        erro: erroGravacao
+      });
+    }
+
+    const { data: encontrado, error: erroLeitura } =
+      await supabase
+        .from("reviews")
+        .select("*")
+        .eq("comment_id", TEST_COMMENT_ID)
+        .single();
+
+    if (erroLeitura) {
+      return res.status(500).json({
+        ok: false,
+        etapa: "leitura",
+        erro: erroLeitura
+      });
+    }
+
+    return res.json({
+      ok: true,
+      message: "Supabase conectado com sucesso.",
+      gravado,
+      encontrado
+    });
+
+  } catch (error) {
+    console.error("Erro db-test:", error);
 
     return res.status(500).json({
       ok: false,
