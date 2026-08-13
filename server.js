@@ -126,39 +126,23 @@ function gerarAssinatura(path, timestamp, accessToken, shopId) {
 }
 
 async function contarRespostasHoje(shopId) {
-  const agora = new Date();
-
-  const inicioHoje = new Date(
-    Date.UTC(
-      agora.getUTCFullYear(),
-      agora.getUTCMonth(),
-      agora.getUTCDate(),
-      0,
-      0,
-      0
-    )
-  ).toISOString();
-
   const {
-    count,
+    data,
     error
-  } = await supabase
-    .from("reviews")
-    .select("*", {
-      count: "exact",
-      head: true
-    })
-    .eq("shop_id", shopId)
-    .eq("status", "RESPONDIDA")
-    .gte("reply_at", inicioHoje);
+  } = await supabase.rpc(
+    "contar_respostas_hoje_sp",
+    {
+      p_shop_id: Number(shopId)
+    }
+  );
 
   if (error) {
     throw new Error(
-      `Erro ao contar respostas do dia: ${error.message}`
+      `Erro ao contar respostas do dia em São Paulo: ${error.message}`
     );
   }
 
-  return count || 0;
+  return Number(data || 0);
 }
 
 async function carregarAuthStateDoSupabase() {
