@@ -5791,6 +5791,10 @@ app.get("/comment-reply-diagnostic/:commentId", async (req, res) => {
   }
 });
 
+app.get("/wake", (req, res) => {
+  return res.status(200).send("OK");
+});
+
 app.listen(PORT, async () => {
   console.log(
     `Servidor rodando na porta ${PORT}`
