@@ -4735,6 +4735,19 @@ app.get("/reply-batch-preview", async (req, res) => {
 app.post("/reply-batch-run", async (req, res) => {
   try {
 
+        const cronSecret =
+      req.headers["x-cron-secret"];
+
+    if (
+      !process.env.REPLY_CRON_SECRET ||
+      cronSecret !== process.env.REPLY_CRON_SECRET
+    ) {
+      return res.status(401).json({
+        ok: false,
+        message: "Não autorizado."
+      });
+    }
+
     if (replyEngineState.running) {
   return res.status(409).json({
     ok: false,
