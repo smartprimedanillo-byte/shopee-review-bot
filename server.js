@@ -5261,6 +5261,57 @@ replyEngineState.ultimoResultado = {
   }
 });
 
+async function consultarComentarioShopeePorId(commentId) {
+  const SHOP_ID = 757373207;
+
+  await renovarTokenShopeeSeNecessario();
+
+  const path =
+    "/api/v2/product/get_comment";
+
+  const timestamp =
+    Math.floor(Date.now() / 1000);
+
+  const sign =
+    gerarAssinatura(
+      path,
+      timestamp,
+      authState.accessToken,
+      SHOP_ID
+    );
+
+  const url =
+    `https://partner.shopeemobile.com${path}` +
+    `?partner_id=${PARTNER_ID}` +
+    `&timestamp=${timestamp}` +
+    `&access_token=${authState.accessToken}` +
+    `&shop_id=${SHOP_ID}` +
+    `&sign=${sign}` +
+    `&comment_id=${Number(commentId)}` +
+    `&page_size=10`;
+
+  const response =
+    await fetch(url);
+
+  const data =
+    await response.json();
+
+  if (data.error) {
+    throw new Error(
+      `Erro Shopee ao consultar comment_id ${commentId}: ${JSON.stringify(data)}`
+    );
+  }
+
+  const comentarios =
+    data?.response?.item_comment_list || [];
+
+  return comentarios.find(
+    item =>
+      Number(item.comment_id) ===
+      Number(commentId)
+  ) || null;
+}
+
 async function recuperarProcessamentosTravados() {
   const SHOP_ID = 757373207;
 
@@ -5293,29 +5344,157 @@ async function recuperarProcessamentosTravados() {
   if (!travados || travados.length === 0) {
     return {
       encontrados: 0,
-      recuperados: 0
+      confirmados_respondidos: 0,
+      devolvidos_pendente: 0,
+      falhas_verificacao: 0
     };
   }
 
-  const ids =
-    travados.map(item => item.id);
+  let confirmadosRespondidos = 0;
+  let devolvidosPendente = 0;
+  let falhasVerificacao = 0;
 
-  const {
-    error: erroAtualizacao
-  } = await supabase
-    .from("reviews")
-    .update({
-      status: "PENDENTE",
-      ultimo_erro:
-        "Processamento interrompido antes da conclusão. Registro devolvido automaticamente para PENDENTE.",
-      updated_at:
-        new Date().toISOString()
-    })
-    .in("id", ids);
+  for (const registro of travados) {
+    try {
 
-  if (erroAtualizacao) {
-    throw new Error(
-      `Erro ao recuperar PROCESSANDO travados: ${erroAtualizacao.message}`
+      const comentario =
+        await consultarComentarioShopeePorId(
+          registro.comment_id
+        );
+
+      // =====================================
+      // SHOPEE CONFIRMA QUE JÁ TEM RESPOSTA
+      // =====================================
+
+      const respostaShopee =
+        comentario?.comment_reply?.reply;
+
+      if (
+        typeof respostaShopee === "string" &&
+        respostaShopee.trim() !== ""
+      ) {
+
+        const replyCreateTime =
+          comentario?.comment_reply?.create_time;
+
+        const replyAt =
+          replyCreateTime
+            ? new Date(
+                Number(replyCreateTime) * 1000
+              ).toISOString()
+            : new Date().toISOString();
+
+        const {
+          error: erroAtualizacao
+        } = await supabase
+          .from("reviews")
+          .update({
+            status: "RESPONDIDA",
+
+            reply_text:
+              respostaShopee,
+
+            reply_at:
+              replyAt,
+
+            ultimo_erro:
+              null,
+
+            updated_at:
+              new Date().toISOString()
+          })
+          .eq("id", registro.id);
+
+        if (erroAtualizacao) {
+          throw new Error(
+            `Erro ao confirmar RESPONDIDA no Supabase: ${erroAtualizacao.message}`
+          );
+        }
+
+        confirmadosRespondidos++;
+
+        console.log(
+          `Recuperação segura: comment_id ${registro.comment_id} já estava respondido na Shopee.`
+        );
+
+        continue;
+      }
+
+      // =====================================
+      // SHOPEE CONFIRMA QUE NÃO HÁ RESPOSTA
+      // =====================================
+
+      if (comentario) {
+
+        const {
+          error: erroAtualizacao
+        } = await supabase
+          .from("reviews")
+          .update({
+            status: "PENDENTE",
+
+            ultimo_erro:
+              "Processamento anterior foi interrompido. Shopee consultada e nenhuma resposta foi encontrada. Registro devolvido para PENDENTE.",
+
+            updated_at:
+              new Date().toISOString()
+          })
+          .eq("id", registro.id);
+
+        if (erroAtualizacao) {
+          throw new Error(
+            `Erro ao devolver registro para PENDENTE: ${erroAtualizacao.message}`
+          );
+        }
+
+        devolvidosPendente++;
+
+        continue;
+      }
+
+      // =====================================
+      // COMENTÁRIO NÃO LOCALIZADO
+      // NÃO DEVOLVE PARA PENDENTE
+      // =====================================
+
+      falhasVerificacao++;
+
+      await supabase
+        .from("reviews")
+        .update({
+          ultimo_erro:
+            "Recuperação automática não conseguiu localizar o comentário na Shopee. Mantido em PROCESSANDO para evitar resposta duplicada.",
+
+          updated_at:
+            new Date().toISOString()
+        })
+        .eq("id", registro.id);
+
+    } catch (error) {
+
+      falhasVerificacao++;
+
+      console.error(
+        `Erro ao reconciliar comment_id ${registro.comment_id}:`,
+        error
+      );
+
+      // Em caso de dúvida, NÃO reenviar.
+      // Mantemos PROCESSANDO para evitar duplicidade.
+      await supabase
+        .from("reviews")
+        .update({
+          ultimo_erro:
+            `Falha na verificação antes da recuperação: ${error.message}`,
+
+          updated_at:
+            new Date().toISOString()
+        })
+        .eq("id", registro.id);
+    }
+
+    await new Promise(resolve =>
+      setTimeout(resolve, 200)
     );
   }
 
@@ -5323,8 +5502,14 @@ async function recuperarProcessamentosTravados() {
     encontrados:
       travados.length,
 
-    recuperados:
-      travados.length
+    confirmados_respondidos:
+      confirmadosRespondidos,
+
+    devolvidos_pendente:
+      devolvidosPendente,
+
+    falhas_verificacao:
+      falhasVerificacao
   };
 }
 
