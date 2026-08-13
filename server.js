@@ -4791,29 +4791,64 @@ console.log(
     // 1. VALIDAR SHOPEE
     // =====================================
 
-    if (!authState.accessToken || !authState.shopId) {
-      return res.status(401).json({
-        ok: false,
-        message:
-          "Loja ainda não autorizada nesta execução."
-      });
-    }
+    if (!authState.shopId || !authState.refreshToken) {
+  replyEngineState.running = false;
 
-    if (authState.expiresAt <= Date.now()) {
-      return res.status(401).json({
-        ok: false,
-        message:
-          "Access token expirado."
-      });
-    }
+  return res.status(401).json({
+    ok: false,
+    message:
+      "Autenticação Shopee não disponível."
+  });
+}
 
-    if (Number(authState.shopId) !== SHOP_ID) {
-      return res.status(400).json({
-        ok: false,
-        message:
-          "A loja autorizada não corresponde à Key Quality."
-      });
-    }
+if (Number(authState.shopId) !== SHOP_ID) {
+  replyEngineState.running = false;
+
+  return res.status(400).json({
+    ok: false,
+    message:
+      "A loja autorizada não corresponde à Key Quality."
+  });
+}
+
+// Verifica o token e renova automaticamente
+// se estiver próximo da expiração.
+try {
+  const resultadoToken =
+    await renovarTokenShopeeSeNecessario();
+
+  console.log(
+    "Verificação de token Shopee:",
+    resultadoToken
+  );
+
+} catch (erroToken) {
+  replyEngineState.running = false;
+
+  return res.status(401).json({
+    ok: false,
+    message:
+      "Não foi possível renovar a autenticação Shopee.",
+    erro:
+      erroToken.message
+  });
+}
+
+// Proteção adicional:
+// só continua se houver access token válido.
+if (
+  !authState.accessToken ||
+  !authState.expiresAt ||
+  authState.expiresAt <= Date.now()
+) {
+  replyEngineState.running = false;
+
+  return res.status(401).json({
+    ok: false,
+    message:
+      "Access token Shopee indisponível ou expirado após tentativa de renovação."
+  });
+}
 
     const respondidasHoje =
   await contarRespostasHoje(SHOP_ID);
@@ -4873,22 +4908,39 @@ if (restanteHoje <= 0) {
   )
 );
 
-    if (erroConsulta) {
-      return res.status(500).json({
-        ok: false,
-        etapa: "consulta_supabase",
-        erro: erroConsulta
-      });
-    }
+   if (erroConsulta) {
+  replyEngineState.running = false;
 
-    if (!candidatas || candidatas.length === 0) {
-      return res.json({
-        ok: true,
-        message:
-          "Nenhuma avaliação elegível encontrada.",
-        total_processado: 0
-      });
-    }
+  replyEngineState.finalizadoEm =
+    new Date().toISOString();
+
+  return res.status(500).json({
+    ok: false,
+    etapa: "consulta_supabase",
+    erro: erroConsulta
+  });
+}
+
+   if (!candidatas || candidatas.length === 0) {
+  replyEngineState.running = false;
+
+  replyEngineState.finalizadoEm =
+    new Date().toISOString();
+
+  replyEngineState.ultimoResultado = {
+    total_processado: 0,
+    enviadas: 0,
+    erros: 0,
+    ignoradas: 0
+  };
+
+  return res.json({
+    ok: true,
+    message:
+      "Nenhuma avaliação elegível encontrada.",
+    total_processado: 0
+  });
+}
 
     const resultados = [];
 
