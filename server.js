@@ -5549,6 +5549,66 @@ app.post("/auth/refresh-force-test", async (req, res) => {
   }
 });
 
+app.get("/comment-reply-diagnostic/:commentId", async (req, res) => {
+  try {
+    const SHOP_ID = 757373207;
+
+    await renovarTokenShopeeSeNecessario();
+
+    const commentId =
+      Number(req.params.commentId);
+
+    if (!commentId) {
+      return res.status(400).json({
+        ok: false,
+        message: "comment_id inválido."
+      });
+    }
+
+    const path =
+      "/api/v2/product/get_comment";
+
+    const timestamp =
+      Math.floor(Date.now() / 1000);
+
+    const sign =
+      gerarAssinatura(
+        path,
+        timestamp,
+        authState.accessToken,
+        SHOP_ID
+      );
+
+    const url =
+      `https://partner.shopeemobile.com${path}` +
+      `?partner_id=${PARTNER_ID}` +
+      `&timestamp=${timestamp}` +
+      `&access_token=${authState.accessToken}` +
+      `&shop_id=${SHOP_ID}` +
+      `&sign=${sign}` +
+      `&comment_id=${commentId}` +
+      `&page_size=10`;
+
+    const response =
+      await fetch(url);
+
+    const data =
+      await response.json();
+
+    return res.json({
+      ok: !data.error,
+      comment_id_consultado: commentId,
+      shopee: data
+    });
+
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
+
 app.listen(PORT, async () => {
   console.log(
     `Servidor rodando na porta ${PORT}`
