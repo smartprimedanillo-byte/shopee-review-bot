@@ -242,7 +242,7 @@ async function renovarTokenShopeeSeNecessario(forcar = false) {
   }
 
   const path =
-    "/api/v2/public/refresh_access_token";
+  "/api/v2/auth/access_token/get";
 
   const timestamp =
     Math.floor(Date.now() / 1000);
