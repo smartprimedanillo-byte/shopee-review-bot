@@ -217,17 +217,18 @@ async function carregarAuthStateDoSupabase() {
   return true;
 }
 
-async function renovarTokenShopeeSeNecessario() {
+async function renovarTokenShopeeSeNecessario(forcar = false) {
   const agora = Date.now();
 
   // margem de segurança de 5 minutos
   const margem = 5 * 60 * 1000;
 
   if (
-    authState.accessToken &&
-    authState.expiresAt &&
-    authState.expiresAt - agora > margem
-  ) {
+  !forcar &&
+  authState.accessToken &&
+  authState.expiresAt &&
+  authState.expiresAt - agora > margem
+) {
     return {
       renovado: false,
       motivo: "Token ainda válido."
@@ -5460,6 +5461,26 @@ app.get("/auth/refresh-test", async (req, res) => {
   try {
     const resultado =
       await renovarTokenShopeeSeNecessario();
+
+    return res.json({
+      ok: true,
+      resultado,
+      token_valid:
+        authState.expiresAt > Date.now()
+    });
+
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
+
+app.post("/auth/refresh-force-test", async (req, res) => {
+  try {
+    const resultado =
+      await renovarTokenShopeeSeNecessario(true);
 
     return res.json({
       ok: true,
