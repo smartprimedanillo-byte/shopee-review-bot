@@ -5795,6 +5795,69 @@ app.get("/wake", (req, res) => {
   return res.status(200).send("OK");
 });
 
+app.post("/cron/reply-trigger", (req, res) => {
+  const cronSecret =
+    req.headers["x-cron-secret"];
+
+  if (
+    !process.env.REPLY_CRON_SECRET ||
+    cronSecret !== process.env.REPLY_CRON_SECRET
+  ) {
+    return res.status(401).send("NAO AUTORIZADO");
+  }
+
+  // Responde imediatamente ao cron-job.org
+  res.status(202).send("OK");
+
+  // Dispara o lote real em segundo plano
+  setImmediate(async () => {
+    try {
+      const response = await fetch(
+        "https://shopee-review-bot.onrender.com/reply-batch-run",
+        {
+          method: "POST",
+          headers: {
+            "x-cron-secret":
+              process.env.REPLY_CRON_SECRET
+          }
+        }
+      );
+
+      const data =
+        await response.json();
+
+      console.log(
+        "[CRON] Resultado do lote:",
+        {
+          status_http:
+            response.status,
+
+          total_processado:
+            data.total_processado,
+
+          enviadas:
+            data.enviadas,
+
+          erros:
+            data.erros,
+
+          ignoradas:
+            data.ignoradas,
+
+          message:
+            data.message
+        }
+      );
+
+    } catch (error) {
+      console.error(
+        "[CRON] Erro ao executar lote:",
+        error
+      );
+    }
+  });
+});
+
 app.listen(PORT, async () => {
   console.log(
     `Servidor rodando na porta ${PORT}`
