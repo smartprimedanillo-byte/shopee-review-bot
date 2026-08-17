@@ -4779,7 +4779,7 @@ console.log(
 
     const SHOP_ID = 757373207;
     const LIMITE = 20;
-    const LIMITE_DIARIO = 500;
+    const LIMITE_DIARIO = 1000;
 
     const RESPOSTA_PADRAO =
       "Agradecemos muito pela sua avaliação! Ficamos felizes com sua compra e seguimos à disposição sempre que precisar.";
