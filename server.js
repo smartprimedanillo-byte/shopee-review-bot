@@ -5596,7 +5596,7 @@ app.get("/reply-engine-status", (req, res) => {
 app.get("/reply-daily-status", async (req, res) => {
   try {
     const SHOP_ID = 757373207;
-    const LIMITE_DIARIO = 500;
+const LIMITE_DIARIO = 1000;
 
     const respondidasHoje =
       await contarRespostasHoje(SHOP_ID);
