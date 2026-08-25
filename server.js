@@ -4669,31 +4669,24 @@ app.get("/reply-batch-preview", async (req, res) => {
     const LIMITE = 20;
 
     const {
-      data,
-      error
-    } = await supabase
-      .from("reviews")
-      .select(`
-        id,
-        comment_id,
-        shop_id,
-        item_id,
-        buyer_username,
-        rating_star,
-        comment,
-        status,
-        tentativas,
-        shopee_create_time
-      `)
-      .eq("shop_id", 757373207)
-      .eq("status", "PENDENTE")
-      .eq("rating_star", 5)
-      .eq("comment", "")
-      .neq("item_status", "TEST")
-      .order("shopee_create_time", {
-        ascending: false
-      })
-      .limit(LIMITE);
+  data,
+  error
+} = await supabase
+  .from("reviews_5_positivas_pendentes")
+  .select(`
+    id,
+    comment_id,
+    buyer_username,
+    rating_star,
+    comment,
+    status,
+    tentativas,
+    shopee_create_time
+  `)
+  .order("shopee_create_time", {
+    ascending: true
+  })
+  .limit(LIMITE);
 
     if (error) {
       return res.status(500).json({
@@ -4779,7 +4772,7 @@ console.log(
 
     const SHOP_ID = 757373207;
     const LIMITE = 20;
-    const LIMITE_DIARIO = 1000;
+    const LIMITE_DIARIO = 2000;
 
     const RESPOSTA_PADRAO =
       "Agradecemos muito pela sua avaliação! Ficamos felizes com sua compra e seguimos à disposição sempre que precisar.";
@@ -5596,7 +5589,7 @@ app.get("/reply-engine-status", (req, res) => {
 app.get("/reply-daily-status", async (req, res) => {
   try {
     const SHOP_ID = 757373207;
-const LIMITE_DIARIO = 1000;
+const LIMITE_DIARIO = 2000;
 
     const respondidasHoje =
       await contarRespostasHoje(SHOP_ID);
