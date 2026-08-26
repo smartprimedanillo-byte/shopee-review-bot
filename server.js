@@ -4775,8 +4775,7 @@ console.log(
     const LIMITE_DIARIO = 2000;
 
     const RESPOSTA_PADRAO =
-      "Agradecemos muito pela sua avaliação! Ficamos felizes com sua compra e seguimos à disposição sempre que precisar.";
-
+  "Agradecemos muito pela sua avaliação e pelo feedback! Ficamos felizes com sua experiência e agradecemos pela confiança em nossa loja.";
     // =====================================
     // 1. VALIDAR SHOPEE
     // =====================================
@@ -4869,34 +4868,30 @@ if (restanteHoje <= 0) {
     // 2. BUSCAR CANDIDATAS NO SUPABASE
     // =====================================
 
-    const {
-      data: candidatas,
-      error: erroConsulta
-    } = await supabase
-      .from("reviews")
-      .select(`
-        id,
-        comment_id,
-        buyer_username,
-        rating_star,
-        comment,
-        status,
-        tentativas
-      `)
-      .eq("shop_id", SHOP_ID)
-      .eq("status", "PENDENTE")
-      .eq("rating_star", 5)
-      .eq("comment", "")
-      .neq("item_status", "TEST")
-      .order("shopee_create_time", {
-        ascending: false
-      })
-     .limit(
-  Math.min(
-    LIMITE,
-    restanteHoje
-  )
-);
+   const {
+  data: candidatas,
+  error: erroConsulta
+} = await supabase
+  .from("reviews_5_positivas_pendentes")
+  .select(`
+    id,
+    comment_id,
+    buyer_username,
+    rating_star,
+    comment,
+    status,
+    tentativas,
+    shopee_create_time
+  `)
+  .order("shopee_create_time", {
+    ascending: true
+  })
+  .limit(
+    Math.min(
+      LIMITE,
+      restanteHoje
+    )
+  );
 
    if (erroConsulta) {
   replyEngineState.running = false;
