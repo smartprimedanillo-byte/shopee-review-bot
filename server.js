@@ -4672,7 +4672,7 @@ app.get("/reply-batch-preview", async (req, res) => {
   data,
   error
 } = await supabase
-  .from("reviews_5_positivas_pendentes")
+  .from("reviews_5_restantes_pendentes")
   .select(`
     id,
     comment_id,
