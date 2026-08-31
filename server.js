@@ -3814,8 +3814,7 @@ app.get("/test-reply-batch-10", async (req, res) => {
     }
 
     const RESPOSTA_PADRAO =
-      "Agradecemos muito pela sua avaliação! Ficamos felizes com sua compra e seguimos à disposição sempre que precisar.";
-
+  "Agradecemos por compartilhar sua experiência. Seu feedback é muito importante para continuarmos melhorando nossos produtos e atendimento.";
     // =====================================
     // ENVIAR RESPOSTAS
     // UMA POR UMA
@@ -4872,7 +4871,7 @@ if (restanteHoje <= 0) {
   data: candidatas,
   error: erroConsulta
 } = await supabase
-  .from("reviews_5_positivas_pendentes")
+.from("reviews_5_restantes_pendentes")
   .select(`
     id,
     comment_id,
